@@ -18,6 +18,7 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         AppRepo.register(this)
+        AutoStart.ensureTaskbarService(this)
         Thread { AppRepo.load(this) }.start()
         if (Prefs.bool(this, Prefs.K_FREEFORM, false)) RootSh.probe()
     }

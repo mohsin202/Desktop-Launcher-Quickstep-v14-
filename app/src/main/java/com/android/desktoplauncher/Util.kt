@@ -451,6 +451,8 @@ object Launch {
         line("System app (system partition)", SysTasks.isSystem(c))
         line("REAL_GET_TASKS", SysTasks.hasRealTasks(c))
         line("Task list from the system", SysTasks.tasks(c)?.let { it.size.toString() + " tasks: " + it.joinToString(", ") { t -> t.pkg + "#" + t.id + "/m" + t.mode } } ?: "not available (accessibility fallback in use)")
+        line("Taskbar window", TaskbarService.instance?.let { if (it.navMode) "navigation bar (space reserved)" else "overlay (fallback)" } ?: "not running")
+        line("SystemUI connected (Quickstep)", SysUi.connected)
         line("Root shell", RootSh.available())
         line("Setting: open apps in freeform", Prefs.bool(c, Prefs.K_FREEFORM, false))
         line("Setting: helper window", Prefs.bool(c, Prefs.K_FFHACK, false))

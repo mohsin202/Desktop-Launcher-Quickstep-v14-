@@ -642,7 +642,8 @@ class SettingsActivity : Activity() {
             override fun onStopTrackingTouch(s: SeekBar?) { Prefs.setTbDp(this@SettingsActivity, (s?.progress ?: 12) + 36) }
         })
         addSetting(sb)
-        note(UiText.text(this, "Match this to the system navigation bar height so the taskbar covers it exactly."))
+        note(UiText.text(this, "The taskbar is the navigation bar: apps stay above it. Default height 56 dp."))
+        sw(UiText.text(this, "Start the taskbar service automatically"), Prefs.K_AUTO_A11Y, true)
         permSw(UiText.text(this, "Taskbar service (Accessibility)"), TaskbarService.instance != null) { go(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
     }
 

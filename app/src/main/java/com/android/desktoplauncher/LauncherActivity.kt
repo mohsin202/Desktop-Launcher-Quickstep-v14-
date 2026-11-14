@@ -201,7 +201,7 @@ class LauncherActivity : Activity() {
                 }
             }
             banner.visibility = android.view.View.VISIBLE
-        } else if (Modes.tablet(this) && barOn() && TaskbarService.instance == null) {
+        } else if (TaskbarService.instance == null && !AutoStart.ensureTaskbarService(this)) {
             banner.text = "Tap: turn on Accessibility to show the taskbar"
             banner.setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
             banner.visibility = android.view.View.VISIBLE

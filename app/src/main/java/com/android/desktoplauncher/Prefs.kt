@@ -36,6 +36,8 @@ object Prefs {
     const val K_BLUR = "blur"
     const val K_GLASS = "glassblur"
     const val K_FREEFORM = "freeform"
+    /** The Quickstep build switches its own taskbar service on (needs WRITE_SECURE_SETTINGS). */
+    const val K_AUTO_A11Y = "autoA11y"
     const val K_WINSIZE = "winsize"
     const val K_FFHACK = "ffhack"
     const val K_IME = "imebtn"

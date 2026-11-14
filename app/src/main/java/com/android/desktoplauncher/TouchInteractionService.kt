@@ -108,6 +108,12 @@ class TouchInteractionService : Service() {
         override fun onTaskbarToggled() { OverviewHooks.taskbarToggled?.invoke() }
     }
 
+    override fun onCreate() {
+        super.onCreate()
+        // SystemUI binds this service at boot: a good moment to switch the taskbar on, without anyone opening Settings
+        AutoStart.ensureTaskbarService(this)
+    }
+
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onUnbind(intent: Intent?): Boolean {
