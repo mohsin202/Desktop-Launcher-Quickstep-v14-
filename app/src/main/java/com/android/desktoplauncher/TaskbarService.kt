@@ -67,6 +67,24 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
     private var editing = false
     private var editPkg: String? = null
     private var metaAlone = false
+    /** How many Windows-key events this service has been given (shown in the test dialog), the app that was open at the last press, and when it was released. */
+    private var metaSeen = 0
+    private var metaFocus: String? = null
+    private var metaUpAt = 0L
+    fun metaInfo() = "$metaSeen events" + if (metaUpAt != 0L) ", last " + (android.os.SystemClock.uptimeMillis() - metaUpAt) / 1000 + " s ago" else ""
+
+    /**
+     * Called when the home screen comes to the front. If that happens right after the Windows key, the system itself took
+     * the key as "go home" (it acted before the key reached this service): bring the app back and open the drawer over it.
+     */
+    fun metaGuard() {
+        val prev = metaFocus ?: return
+        if (metaUpAt == 0L || android.os.SystemClock.uptimeMillis() - metaUpAt > 900) return
+        metaUpAt = 0L
+        if (prev == packageName || !Prefs.bool(this, Prefs.K_WINKEY, true)) return
+        try { packageManager.getLaunchIntentForPackage(prev)?.let { startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } } catch (_: Exception) {}
+        handler.postDelayed({ if (drawer == null) openDrawer() }, 200)
+    }
     private val listener: () -> Unit = { sync() }
     /** Apps the user hid from the taskbar; they only come back when they are opened again. */
     private val dismissed = HashSet<String>()
@@ -157,8 +175,13 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
 
     /** Windows / Meta key on a hardware keyboard opens the app drawer. */
     override fun onKeyEvent(e: android.view.KeyEvent): Boolean {
-        if (bar == null || !Prefs.bool(this, Prefs.K_WINKEY, true)) return false
         val meta = e.keyCode == android.view.KeyEvent.KEYCODE_META_LEFT || e.keyCode == android.view.KeyEvent.KEYCODE_META_RIGHT
+        if (meta) {
+            metaSeen++
+            if (e.action == android.view.KeyEvent.ACTION_DOWN && e.repeatCount == 0) metaFocus = focused
+            if (e.action == android.view.KeyEvent.ACTION_UP) metaUpAt = android.os.SystemClock.uptimeMillis()
+        }
+        if (bar == null || !Prefs.bool(this, Prefs.K_WINKEY, true)) return false
         if (meta) {
             if (e.action == android.view.KeyEvent.ACTION_DOWN) { if (e.repeatCount == 0) metaAlone = true; return true }
             if (e.action == android.view.KeyEvent.ACTION_UP) {
@@ -253,6 +276,8 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
     override fun global(action: Int) {
         // Back goes through SystemUI's own proxy when connected: exactly what the stock navigation bar does
         if (action == GLOBAL_ACTION_BACK && SysUi.back()) return
+        // Recents: our own Overview screen (same one SystemUI opens through TouchInteractionService)
+        if (action == GLOBAL_ACTION_RECENTS) { com.android.quickstep.RecentsActivity.toggle(this); return }
         performGlobalAction(action)
     }
 

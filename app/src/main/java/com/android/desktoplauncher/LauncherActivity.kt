@@ -178,6 +178,7 @@ class LauncherActivity : Activity() {
     }
 
     override fun onResume() {
+        TaskbarService.instance?.metaGuard()
         super.onResume()
         applyMode()
         updateBanner()

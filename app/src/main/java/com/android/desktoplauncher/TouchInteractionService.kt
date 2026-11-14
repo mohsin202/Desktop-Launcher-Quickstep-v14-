@@ -84,6 +84,7 @@ object SysUi {
  * us its ISystemUiProxy.
  */
 class TouchInteractionService : Service() {
+    private val mainH = Handler(Looper.getMainLooper())
     private val binder = object : IOverviewProxy.Stub() {
         override fun onInitialize(params: Bundle?) {
             val b = params?.getBinder(KEY_SYSUI_PROXY)
@@ -95,9 +96,10 @@ class TouchInteractionService : Service() {
         override fun onNavButtonsDarkIntensityChanged(darkIntensity: Float) { SysUi.setDark(darkIntensity) }
         override fun onAssistantAvailable(available: Boolean, longPressHomeEnabled: Boolean) { SysUi.setAssistant(available) }
         // Not used yet (they belong to Overview / gestures / assistant; the next phases). Kept so SystemUI gets an answer.
-        override fun onOverviewToggle() { OverviewHooks.toggle?.invoke() }
-        override fun onOverviewShown(triggeredFromAltTab: Boolean) { OverviewHooks.shown?.invoke(triggeredFromAltTab) }
-        override fun onOverviewHidden(triggeredFromAltTab: Boolean, triggeredFromHomeKey: Boolean) { OverviewHooks.hidden?.invoke(triggeredFromAltTab) }
+        // The hardware Recents key, Alt+Tab and the system's own "toggle recents" all arrive here
+        override fun onOverviewToggle() { mainH.post { com.android.quickstep.RecentsActivity.toggle(applicationContext) } }
+        override fun onOverviewShown(triggeredFromAltTab: Boolean) { mainH.post { com.android.quickstep.RecentsActivity.show(applicationContext) } }
+        override fun onOverviewHidden(triggeredFromAltTab: Boolean, triggeredFromHomeKey: Boolean) { mainH.post { com.android.quickstep.RecentsActivity.hide() } }
         override fun onAssistantVisibilityChanged(visibility: Float) {}
         override fun onAssistantOverrideInvoked(invocationType: Int) {}
         override fun onRotationProposal(rotation: Int, isValid: Boolean) {}
