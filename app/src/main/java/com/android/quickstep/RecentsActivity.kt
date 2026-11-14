@@ -66,8 +66,10 @@ class RecentsActivity : Activity() {
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
         current = this
-        val root = object : FrameLayout(this) {
-            override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) { super.onSizeChanged(w, h, ow, oh); if (w > 0 && h > 0) rebuild(w, h) }
+        val root = FrameLayout(this)
+        // Built after the first layout (not inside it), once the size is known
+        root.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
+            if (!built && v.width > 0 && v.height > 0) v.post { if (!built) safeRebuild(v.width, v.height) }
         }
         root.setBackgroundColor(0xB3000000.toInt())
         scroll = Carousel(this) { leave() }
@@ -89,10 +91,19 @@ class RecentsActivity : Activity() {
 
     private fun rtl() = resources.configuration.layoutDirection == View.LAYOUT_DIRECTION_RTL
 
+    private fun safeRebuild(w: Int, h: Int) {
+        try { rebuild(w, h) } catch (t: Throwable) {
+            empty.text = "Overview error:\n$t"; empty.textSize = 14f; empty.visibility = View.VISIBLE
+        }
+    }
+
     private fun rebuild(w: Int, h: Int) {
         if (built) return
         built = true
-        if (tasks.isEmpty()) { empty.visibility = View.VISIBLE; return }
+        if (tasks.isEmpty()) {
+            empty.text = UiText.text(this, "No recent items") + "\n\n" + Recents.diag
+            empty.visibility = View.VISIBLE; return
+        }
         val dm = resources.displayMetrics
         // The picture uses up to 70% of the height; header (icon + name) above it, same proportions as the screen
         val header = dp(44)
