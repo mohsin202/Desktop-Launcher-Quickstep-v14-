@@ -48,6 +48,7 @@
     <uses-permission android:name="android.permission.BIND_APPWIDGET" tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.GET_ACCOUNTS_PRIVILEGED" tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.ACCESS_SHORTCUTS" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.READ_FRAME_BUFFER" tools:ignore="ProtectedPermissions" />
 
     <application
         android:name=".App"
@@ -72,6 +73,17 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <!-- The Overview (Recents) screen: the component the ROM names in config_recentsComponentName -->
+        <activity
+            android:name="com.android.quickstep.RecentsActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:stateNotNeeded="true"
+            android:taskAffinity="com.android.launcher3.recents"
+            android:theme="@style/Theme.Desktop.Floating" />
 
         <activity
             android:name=".SettingsActivity"
