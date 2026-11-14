@@ -295,7 +295,7 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
                 NavActions.DRAWER -> toggleDrawer()
                 NavActions.BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
                 NavActions.HOME -> performGlobalAction(GLOBAL_ACTION_HOME)
-                NavActions.RECENTS -> performGlobalAction(GLOBAL_ACTION_RECENTS)
+                NavActions.RECENTS -> com.android.quickstep.RecentsActivity.toggle(this)
             }
         } catch (e: Exception) { Log.e("DesktopTaskbar", "Long-press action failed", e) }
     }

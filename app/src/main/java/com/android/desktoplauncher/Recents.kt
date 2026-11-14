@@ -23,14 +23,21 @@ class RTask(val id: Int, val pkg: String, val label: String, val icon: Drawable,
 object Recents {
     private const val TAG = "DesktopQuickstep"
 
+    /** What the last [load] saw, shown on screen when the list is empty so a problem can be found without a log. */
+    @Volatile var diag = ""
+
     @Suppress("DEPRECATION")
     fun load(c: Context): List<RTask> {
         val out = ArrayList<RTask>()
+        var raw = -1
+        var err = ""
         try {
             val am = c.getSystemService(ActivityManager::class.java) ?: return out
             val pm = c.packageManager
             val seen = HashSet<Int>()
-            for (ti in am.getRecentTasks(40, ActivityManager.RECENT_IGNORE_UNAVAILABLE)) {
+            val rl = am.getRecentTasks(40, ActivityManager.RECENT_IGNORE_UNAVAILABLE)
+            raw = rl.size
+            for (ti in rl) {
                 val id = ti.persistentId
                 if (id < 0 || !seen.add(id)) continue
                 val intent = ti.baseIntent ?: continue
@@ -45,7 +52,24 @@ object Recents {
                 if (col == 0) col = Color.rgb(48, 52, 58)
                 out.add(RTask(id, comp.packageName, label, icon, col or 0xFF000000.toInt(), intent))
             }
-        } catch (t: Throwable) { Log.w(TAG, "recent tasks: $t") }
+        } catch (t: Throwable) { Log.w(TAG, "recent tasks: $t"); err = t.toString() }
+        var viaRunning = 0
+        if (out.isEmpty()) {
+            // The recent list gave nothing usable: use the running tasks (the list the taskbar already works with)
+            try {
+                val pm = c.packageManager
+                val seen = HashSet<String>()
+                for (t in SysTasks.tasks(c) ?: emptyList()) {
+                    if (t.pkg == c.packageName || !seen.add(t.pkg)) continue
+                    val li = pm.getLaunchIntentForPackage(t.pkg) ?: continue
+                    val comp = li.component ?: continue
+                    val label = try { pm.getApplicationInfo(t.pkg, 0).loadLabel(pm).toString() } catch (_: Throwable) { t.pkg }
+                    val icon = try { Icons.app(c, comp) } catch (_: Throwable) { pm.defaultActivityIcon }
+                    out.add(RTask(t.id, t.pkg, label, icon, Color.rgb(48, 52, 58), li)); viaRunning++
+                }
+            } catch (th: Throwable) { err += " running: $th" }
+        }
+        diag = "recent list: $raw, running list used: $viaRunning, shown: ${out.size}" + (if (err.isNotEmpty()) ", error: $err" else "")
         return out
     }
 
