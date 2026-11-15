@@ -124,6 +124,7 @@ class SettingsActivity : Activity() {
         Pg("DESKTOP", "DESKTOP", "Desktop items and wallpaper", "⌂") { secDesktop() },
         Pg("TASKBAR / DOCK", "TASKBAR / DOCK", "Taskbar, dock and navigation controls", "▤") { secTaskbar() },
         Pg("WINDOWS", "WINDOWS", "Freeform windows and sizes", "▢") { secWindows() },
+        Pg("RECENT APPS", "RECENT APPS", "Overview background and memory", "▭") { secRecents() },
         Pg("PERMISSIONS", "PERMISSIONS", "Access needed by launcher features", "✓") { secPermissions() }
     )
 
@@ -534,6 +535,14 @@ class SettingsActivity : Activity() {
         note(UiText.text(this, "When off, the app drawer opens without automatically showing the keyboard. Back should hide the keyboard before closing the drawer."))
     }
 
+    private fun secRecents() {
+        card()
+        sw(UiText.text(this, "Enable background blur"), Prefs.K_REC_BLUR, false)
+        note(UiText.text(this, "Blurs the wallpaper behind the recent apps screen. Off: a solid Material You colour."))
+        sw(UiText.text(this, "Show memory size"), Prefs.K_REC_MEM, false)
+        note(UiText.text(this, "Shows the memory in use under the windows, for example 3.45 GB used of 6 GB."))
+    }
+
     private fun secWindows() {
         card()
         sw(UiText.text(this, "Open apps in freeform windows"), Prefs.K_FREEFORM, false)
@@ -601,6 +610,7 @@ class SettingsActivity : Activity() {
         val notifOn = Settings.Secure.getString(contentResolver, "enabled_notification_listeners")?.contains(packageName) == true
         card()
         sw(UiText.text(this, "Show Back / Home / Recents buttons"), Prefs.K_NAV, true)
+        note(UiText.text(this, "With gesture navigation the buttons are hidden: swipe up on the bar for Home, swipe up and hold for Recents."))
         note(UiText.text(this, "Look of the Back / Home / Recents buttons on the taskbar"))
         val ng = RadioGroup(this)
         NavStyle.names.forEachIndexed { i, n ->
@@ -642,7 +652,7 @@ class SettingsActivity : Activity() {
             override fun onStopTrackingTouch(s: SeekBar?) { Prefs.setTbDp(this@SettingsActivity, (s?.progress ?: 12) + 36) }
         })
         addSetting(sb)
-        note(UiText.text(this, "The taskbar is the navigation bar: apps stay above it. Default height 56 dp."))
+        note(UiText.text(this, "The taskbar is the navigation bar: apps stay above it. Default height 48 dp."))
         sw(UiText.text(this, "Start the taskbar service automatically"), Prefs.K_AUTO_A11Y, true)
         permSw(UiText.text(this, "Taskbar service (Accessibility)"), TaskbarService.instance != null) { go(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
     }

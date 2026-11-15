@@ -90,6 +90,8 @@ class TouchInteractionService : Service() {
             val b = params?.getBinder(KEY_SYSUI_PROXY)
             SysUi.set(if (b != null) ISystemUiProxy.Stub.asInterface(b) else null)
             Log.i(TAG, "SystemUI connected, proxy=${b != null}")
+            // tell SystemUI the taskbar is the navigation bar (it then draws none of its own and keeps the back gesture)
+            mainH.post { TaskbarService.instance?.onSysUiConnected() }
         }
         override fun onActiveNavBarRegionChanges(activeRegion: Region?) { SysUi.setRegion(activeRegion) }
         override fun onSystemUiStateChanged(stateFlags: Int) { SysUi.setState(stateFlags) }

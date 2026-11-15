@@ -36,6 +36,9 @@ object Prefs {
     const val K_BLUR = "blur"
     const val K_GLASS = "glassblur"
     const val K_FREEFORM = "freeform"
+    /** Overview: blur the wallpaper behind it (otherwise a solid Material You colour) / show the memory line. */
+    const val K_REC_BLUR = "recBlur"
+    const val K_REC_MEM = "recMem"
     /** The Quickstep build switches its own taskbar service on (needs WRITE_SECURE_SETTINGS). */
     const val K_AUTO_A11Y = "autoA11y"
     const val K_WINSIZE = "winsize"
@@ -81,7 +84,7 @@ object Prefs {
     fun layoutMode(c: Context) = sp(c).getInt("layout", 0)
     fun setLayoutMode(c: Context, v: Int) { sp(c).edit().putInt("layout", v).apply(); Bus.fire() }
 
-    fun tbDp(c: Context) = sp(c).getInt(K_TBH, 56)
+    fun tbDp(c: Context) = sp(c).getInt(K_TBH, 48)
     fun setTbDp(c: Context, v: Int) { sp(c).edit().putInt(K_TBH, v).apply(); Bus.fire() }
 
     fun list(c: Context, k: String): List<String> =

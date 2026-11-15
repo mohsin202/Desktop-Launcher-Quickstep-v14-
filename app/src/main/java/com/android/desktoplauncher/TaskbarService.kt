@@ -89,6 +89,15 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
     /** Apps the user hid from the taskbar; they only come back when they are opened again. */
     private val dismissed = HashSet<String>()
     private val handler = Handler(Looper.getMainLooper())
+    /** Navigation mode changed (three buttons <-> gestures): rebuild the bar's buttons. */
+    private val navObserver = object : android.database.ContentObserver(Handler(Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean) { bar?.refresh() }
+    }
+
+    /** Called when SystemUI connects (TouchInteractionService): tell it the taskbar is the navigation bar. */
+    fun onSysUiConnected() {
+        if (bar != null) { SysUi.taskbarEnabled(true); SysUi.taskbarStatus(true, false) }
+    }
     private val pruneTick = object : Runnable {
         override fun run() { if (!syncTasks()) pruneDead(); if (bar != null) { navWin = detectNavWin(); setBarShown(systemBarsVisible() || navWin) }; handler.postDelayed(this, if (SysTasks.trusted(this@TaskbarService)) 1500 else 4000) }
     }
@@ -98,6 +107,7 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
         try {
             instance = this
             wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            try { contentResolver.registerContentObserver(android.provider.Settings.Secure.getUriFor(NavMode.KEY), false, navObserver) } catch (_: Throwable) {}
             uctx = ContextThemeWrapper(this, android.R.style.Theme_DeviceDefault)
             Bus.add(listener)
             sync()
@@ -111,6 +121,8 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
 
     override fun onDestroy() {
         handler.removeCallbacks(pruneTick)
+        try { contentResolver.unregisterContentObserver(navObserver) } catch (_: Throwable) {}
+        SysUi.taskbarEnabled(false)
         Bus.remove(listener)
         closeDrawer()
         removeBar()
@@ -448,6 +460,7 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
             barShown = true
             // follow the system bars: hidden in video / fullscreen, back when the system buttons come back
             v.onInsets = { handler.post { sync(false) } }
+            if (SysUi.connected) onSysUiConnected()
         } catch (e: Exception) {
             Log.e("DesktopTaskbar", "Could not add taskbar overlay", e)
             if (v != null) try { wm.removeView(v) } catch (_: Exception) {}
@@ -595,6 +608,57 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
         refresh()
     }
 
+    /** Back / Home / Recents buttons are shown in the taskbar with three-button navigation; in gesture navigation they are swipes. */
+    private fun navButtons() = showNav && Prefs.bool(ctx, Prefs.K_NAV, true) && !NavMode.gesture(ctx)
+
+    // ---- Gesture navigation: swipe from the bar towards the screen: quickly = Home, slowly and far (hold) = Recents ----
+    private val gSlop = android.view.ViewConfiguration.get(ctx).scaledTouchSlop
+    private var gx = 0f; private var gy = 0f; private var gActive = false
+    private var gVt: android.view.VelocityTracker? = null
+
+    /** How far the finger went towards the inside of the screen (up for a bottom bar, left / right for a side bar). */
+    private fun inward(x: Float, y: Float) = when (side) { 1 -> x - gx; 2 -> gx - x; else -> gy - y }
+    private fun across(x: Float, y: Float) = when (side) { 0 -> x - gx; else -> y - gy }
+
+    override fun onInterceptTouchEvent(ev: android.view.MotionEvent): Boolean {
+        if (!showNav || !NavMode.gesture(ctx)) return false
+        when (ev.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN -> {
+                gx = ev.rawX; gy = ev.rawY; gActive = false
+                gVt?.recycle(); gVt = android.view.VelocityTracker.obtain().also { it.addMovement(ev) }
+            }
+            android.view.MotionEvent.ACTION_MOVE -> {
+                gVt?.addMovement(ev)
+                if (!gActive) {
+                    val d = inward(ev.rawX, ev.rawY); val o = Math.abs(across(ev.rawX, ev.rawY))
+                    if (d > gSlop * 2 && d > o * 1.5f) { gActive = true; return true }
+                }
+            }
+            android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> { gVt?.recycle(); gVt = null }
+        }
+        return false
+    }
+
+    override fun onTouchEvent(ev: android.view.MotionEvent): Boolean {
+        if (!gActive) return super.onTouchEvent(ev)
+        gVt?.addMovement(ev)
+        if (ev.actionMasked == android.view.MotionEvent.ACTION_UP || ev.actionMasked == android.view.MotionEvent.ACTION_CANCEL) {
+            gActive = false
+            val vt = gVt; gVt = null
+            vt?.computeCurrentVelocity(1000)
+            val speed = when (side) { 1 -> vt?.xVelocity ?: 0f; 2 -> -(vt?.xVelocity ?: 0f); else -> -(vt?.yVelocity ?: 0f) }
+            vt?.recycle()
+            val dist = inward(ev.rawX, ev.rawY)
+            if (ev.actionMasked == android.view.MotionEvent.ACTION_UP && dist >= ctx.dp(24)) {
+                performHapticFeedback(android.view.HapticFeedbackConstants.GESTURE_END)
+                // far and slow (swipe up and hold) = Recents, otherwise Home
+                if (dist >= ctx.dp(110) && speed < 600f) svc.global(AccessibilityService.GLOBAL_ACTION_RECENTS)
+                else svc.global(AccessibilityService.GLOBAL_ACTION_HOME)
+            }
+        }
+        return true
+    }
+
     /** Mouse wheel scrolls the app strip sideways. */
     override fun onGenericMotionEvent(ev: android.view.MotionEvent): Boolean {
         if (ev.actionMasked == android.view.MotionEvent.ACTION_SCROLL) {
@@ -653,7 +717,7 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
             appsRow.addView(appItem(comp, true, svc.focused == pkg, false, cell).also { it.tag = pkg }, LinearLayout.LayoutParams(cell, MATCH))
         }
         center.addView(scroll, LinearLayout.LayoutParams(0, MATCH, 1f))
-        val navCount = if (showNav && Prefs.bool(ctx, Prefs.K_NAV, true)) 3 else 0
+        val navCount = if (navButtons()) 3 else 0
         val imeCount = if (showNav && svc.imeShown && Prefs.bool(ctx, Prefs.K_IME, true)) 1 else 0
         val navReserve = if (showNav) cell * (navCount + imeCount) + (if (body != null) ctx.dp(8) else ctx.dp(92)) else ctx.dp(4)
         (center.layoutParams as? LayoutParams)?.let { it.rightMargin = navReserve; center.layoutParams = it }
@@ -677,7 +741,7 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
                 b.background = ripple(); b.setOnClickListener { svc.pickIme() }
             }, LinearLayout.LayoutParams(cell, MATCH))
         }
-        if (showNav && Prefs.bool(ctx, Prefs.K_NAV, true)) {
+        if (navButtons()) {
             right.addView(NavButton(ctx, 0).also { b ->
                 b.background = ripple(); b.setOnClickListener { svc.global(AccessibilityService.GLOBAL_ACTION_BACK) }
                 b.setOnLongClickListener { it.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS); svc.navLong(0); true }
