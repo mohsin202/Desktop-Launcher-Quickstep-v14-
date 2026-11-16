@@ -658,8 +658,21 @@ class SettingsActivity : Activity() {
         note(UiText.text(this, "Off: the taskbar pill is always shown and apps stay above it."))
         sw(UiText.text(this, "Pill-shaped taskbar (three-button navigation)"), Prefs.K_PILL, false)
         note(UiText.text(this, "The bar becomes a floating pill; apps do not go behind it."))
-        sw(UiText.text(this, "Transparent taskbar (takes the app's colour)"), Prefs.K_BAR_CLEAR, true)
-        note(UiText.text(this, "The flat taskbar has no colour of its own: the app's background shows in it. Off: Material You colour."))
+        sw(UiText.text(this, "Taskbar transparency"), Prefs.K_BAR_CLEAR, true)
+        val sh = TextView(this)
+        sh.setTextColor(Colors.text(this))
+        sh.text = UiText.text(this, "Scrim") + ": ${Prefs.scrim(this)}%"
+        addSetting(sh)
+        val ss = SeekBar(this)
+        ss.max = 100
+        ss.progress = Prefs.scrim(this)
+        ss.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar?, p: Int, u: Boolean) { sh.text = UiText.text(this@SettingsActivity, "Scrim") + ": $p%" }
+            override fun onStartTrackingTouch(s: SeekBar?) {}
+            override fun onStopTrackingTouch(s: SeekBar?) { Prefs.setInt(this@SettingsActivity, Prefs.K_BAR_SCRIM, s?.progress ?: 25) }
+        })
+        addSetting(ss)
+        note(UiText.text(this, "On: the Material You colour goes; the bar (or the pill) gets only a light scrim, and its buttons turn light or dark by the background. Off: Material You colour."))
         permSw(UiText.text(this, "Taskbar service (Accessibility)"), TaskbarService.instance != null) { go(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
     }
 

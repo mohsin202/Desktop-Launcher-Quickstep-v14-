@@ -149,60 +149,96 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
     override fun barOutside() { if (expanded && drawer == null) setExpanded(false) }
     override fun appLaunched() { if (autoHide()) { if (drawer != null) closeDrawer(); setExpanded(false) } }
 
-    // ---- Colour of the gesture handle: light on a dark background, grey on a light one ----
+    // ---- What is behind the bar decides the colour of the gesture handle and of the bar's buttons ----
     private var sampleQueued = false
     private var sampleBusy = false
     private var lastSample = 0L
+    private var inkDark = true
+    private var lastInk: Int? = null
     private val sampleRun = Runnable { sampleQueued = false; sampleHandle() }
     private fun themeDark() = (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
         android.content.res.Configuration.UI_MODE_NIGHT_YES
 
+    /** Transparent bar: its buttons are light on a dark background and dark on a light one. */
+    private fun inkWanted() = barShown && !collapsedNow() && barSide == 0 && Prefs.bool(this, Prefs.K_BAR_CLEAR, true)
+    private fun sampleWanted() = barShown && (collapsedNow() || inkWanted())
+    private fun scrimFrac() = Prefs.scrim(this) / 100f
+
     private fun scheduleSample() {
-        if (sampleQueued || !collapsedNow() || !barShown) return
+        if (!inkWanted() && lastInk != null) { lastInk = null; bar?.setInk(null) }
+        if (sampleQueued || !sampleWanted()) return
         sampleQueued = true
         handler.postDelayed(sampleRun, (lastSample + 1200 - SystemClock.uptimeMillis()).coerceAtLeast(200))
     }
 
     private fun sampleHandle() {
         val b = bar ?: return
-        if (!collapsedNow() || !barShown || sampleBusy) return
+        if (!sampleWanted() || sampleBusy) return
         val pm = getSystemService(android.os.PowerManager::class.java)
         if (pm != null && !pm.isInteractive) return
-        if (android.os.Build.VERSION.SDK_INT < 30) { b.setHandleDark(themeDark()); return }
+        if (android.os.Build.VERSION.SDK_INT < 30) { if (collapsedNow()) b.setHandleDark(themeDark()); return }
         sampleBusy = true; lastSample = SystemClock.uptimeMillis()
         try {
             takeScreenshot(android.view.Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
                 override fun onSuccess(r: ScreenshotResult) {
-                    var dark = themeDark()
+                    var handleDark = themeDark()
+                    var lum: Float? = null
+                    val handle = collapsedNow()
                     try {
                         val hb = r.hardwareBuffer
                         val hw = Bitmap.wrapHardwareBuffer(hb, r.colorSpace)
-                        if (hw != null) { dark = stripDark(hw) ?: dark; hw.recycle() }
+                        if (hw != null) {
+                            if (handle) handleDark = (lumOf(hw, handleRects(hw.width, hw.height)) ?: 0f) < 0.5f
+                            else lum = lumOf(hw, bandRects(hw.width, hw.height))
+                            hw.recycle()
+                        }
                         hb.close()
-                    } catch (t: Throwable) { Log.w("DesktopTaskbar", "Handle colour: $t") }
+                    } catch (t: Throwable) { Log.w("DesktopTaskbar", "Bar colour: $t") }
                     sampleBusy = false
-                    bar?.setHandleDark(dark)
+                    if (handle) bar?.setHandleDark(handleDark) else applyInk(lum)
                     // the page behind may change without any window event: look again in a few seconds
-                    sampleQueued = true; handler.postDelayed(sampleRun, 3000)
+                    if (sampleWanted() && !sampleQueued) { sampleQueued = true; handler.postDelayed(sampleRun, 3000) }
                 }
-                override fun onFailure(errorCode: Int) { sampleBusy = false; bar?.setHandleDark(themeDark()) }
+                override fun onFailure(errorCode: Int) { sampleBusy = false; if (collapsedNow()) bar?.setHandleDark(themeDark()) }
             })
-        } catch (t: Throwable) { sampleBusy = false; b.setHandleDark(themeDark()) }
+        } catch (t: Throwable) { sampleBusy = false; if (collapsedNow()) b.setHandleDark(themeDark()) }
     }
 
-    /** True when the screen next to the strip (left and right of the handle) is dark. */
-    private fun stripDark(src: Bitmap): Boolean? {
-        val w = src.width; val h = src.height
+    /** Light or dark buttons for the average brightness behind the bar (a pill's own scrim is mixed in). */
+    private fun applyInk(lum: Float?) {
+        val b = bar ?: return
+        if (!inkWanted()) { lastInk = null; b.setInk(null); return }
+        if (lum == null) return
+        val eff = if (floatingNow()) { val a = scrimFrac(); a * (if (Colors.night(this)) 0f else 1f) + (1f - a) * lum } else lum
+        inkDark = if (inkDark) eff < 0.55f else eff < 0.45f   // a little hysteresis: no flicker around the middle
+        val ink = if (inkDark) 0xFFF4F4F4.toInt() else 0xFF1B1B1F.toInt()
+        lastInk = ink
+        b.setInk(ink)
+    }
+
+    /** Next to the gesture handle: left and right of it in the strip. */
+    private fun handleRects(w: Int, h: Int): List<android.graphics.Rect> {
         val s = stripPx().coerceAtMost(minOf(w, h) / 4)
-        val rects = ArrayList<android.graphics.Rect>()
-        when (barSide) {
-            0 -> { rects += android.graphics.Rect(w / 20, h - s, w * 7 / 20, h); rects += android.graphics.Rect(w * 13 / 20, h - s, w * 19 / 20, h) }
-            1 -> { rects += android.graphics.Rect(0, h / 20, s, h * 7 / 20); rects += android.graphics.Rect(0, h * 13 / 20, s, h * 19 / 20) }
-            else -> { rects += android.graphics.Rect(w - s, h / 20, w, h * 7 / 20); rects += android.graphics.Rect(w - s, h * 13 / 20, w, h * 19 / 20) }
+        return when (barSide) {
+            0 -> listOf(android.graphics.Rect(w / 20, h - s, w * 7 / 20, h), android.graphics.Rect(w * 13 / 20, h - s, w * 19 / 20, h))
+            1 -> listOf(android.graphics.Rect(0, h / 20, s, h * 7 / 20), android.graphics.Rect(0, h * 13 / 20, s, h * 19 / 20))
+            else -> listOf(android.graphics.Rect(w - s, h / 20, w, h * 7 / 20), android.graphics.Rect(w - s, h * 13 / 20, w, h * 19 / 20))
         }
+    }
+
+    /** Where no button is: the free gap under a pill, or the top rows of a flat bar. */
+    private fun bandRects(w: Int, h: Int): List<android.graphics.Rect> {
+        val d = uctx.dp(1).coerceAtLeast(1)
+        return if (floatingNow()) listOf(android.graphics.Rect(w / 20, h - 9 * d, w * 19 / 20, h - 3 * d))
+        else listOf(android.graphics.Rect(w / 20, h - winThick(), w * 19 / 20, h - winThick() + 4 * d))
+    }
+
+    /** Average brightness (0 dark .. 1 light) of the given screen areas. */
+    private fun lumOf(src: Bitmap, rects: List<android.graphics.Rect>): Float? {
         var sum = 0.0; var n = 0
-        for (r in rects) {
-            if (r.width() <= 0 || r.height() <= 0) continue
+        for (r0 in rects) {
+            val r = android.graphics.Rect(r0)
+            if (!r.intersect(0, 0, src.width, src.height) || r.width() <= 0 || r.height() <= 0) continue
             val part = Bitmap.createBitmap(src, r.left, r.top, r.width(), r.height())
             val soft = part.copy(Bitmap.Config.ARGB_8888, false) ?: continue
             val px = IntArray(soft.width * soft.height)
@@ -215,7 +251,7 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
             }
             soft.recycle(); if (part !== src) part.recycle()
         }
-        return if (n == 0) null else (sum / n) < 0.5
+        return if (n == 0) null else (sum / n).toFloat()
     }
 
     private fun fullLen(side: Int) = if (side == 0) screenBounds().width() else screenBounds().height()
@@ -648,6 +684,7 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
             // follow the system bars: hidden in video / fullscreen, back when the system buttons come back
             v.onInsets = { handler.post { sync(false) } }
             v.onContent = { handler.post { fitBar() } }
+            lastInk?.let { v.setInk(it) }
             if (SysUi.connected) onSysUiConnected()
         } catch (e: Exception) {
             Log.e("DesktopTaskbar", "Could not add taskbar overlay", e)
@@ -752,6 +789,10 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
     private var thickPx = if (thick0 > 0) thick0 else ctx.dp(Prefs.tbDp(ctx))
     private val handleV = View(ctx)
     private var handleDark = true
+    private var inkColor: Int? = null
+    /** Colour of the buttons: the theme's, or (transparent bar) light / dark by what is behind the bar. */
+    fun ink(): Int = inkColor ?: Colors.text(ctx)
+    fun setInk(c: Int?) { if (c == inkColor) return; inkColor = c; if (!collapsed) refresh() }
     private var gMouse = false
     private var hoverPending = false
     private val hoverRun = Runnable { hoverPending = false; if (collapsed) svc.expandBar(true) }
@@ -1025,6 +1066,9 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
         center.visibility = View.VISIBLE
         val barCol = Colors.taskbar(ctx)
         val floating = floatingShape()
+        // transparent bar: no Material You colour, only a neutral scrim (light theme: white, dark theme: black) of the chosen strength
+        val clear = showNav && Prefs.bool(ctx, Prefs.K_BAR_CLEAR, true)
+        val scrimCol = (if (Colors.night(ctx)) 0 else 0xFFFFFF) or ((Prefs.scrim(ctx) * 255 / 100) shl 24)
         val bg = if (pill) Colors.panel(ctx, barCol, ctx.dp(28).toFloat())
                  else if (floating) {
                      // thin Material You outline so the pill stands out on any background
@@ -1035,10 +1079,10 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
                          setColor(0)
                          setStroke(ctx.dp(1).coerceAtLeast(1), (Colors.accent(ctx) and 0x00FFFFFF) or 0xE6000000.toInt())
                      }
-                     android.graphics.drawable.LayerDrawable(arrayOf(Colors.panel(ctx, barCol, r), ring))
+                     android.graphics.drawable.LayerDrawable(arrayOf(Colors.panel(ctx, if (clear) scrimCol else barCol, r), ring))
                  }
                  // flat bar: no colour of its own (the apps paint the band, now that the system scrim is off), or the Material You colour
-                 else if (showNav && Prefs.bool(ctx, Prefs.K_BAR_CLEAR, true)) android.graphics.drawable.ColorDrawable(0)
+                 else if (clear) android.graphics.drawable.ColorDrawable(scrimCol)
                  else android.graphics.drawable.ColorDrawable(barCol)
         host.background = bg
         // Keep the scroll position across rebuilds (the strip used to jump back to the start).
@@ -1072,7 +1116,7 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
         val unpinned = svc.running.filter { it !in shownPk }.mapNotNull { pkg -> AppRepo.byPkg(ctx, pkg)?.let { pkg to it.comp } }
         if (unpinned.isNotEmpty() && pinned.isNotEmpty()) {
             val divider = View(ctx)
-            divider.setBackgroundColor(Colors.text(ctx) and 0x55FFFFFF)
+            divider.setBackgroundColor(ink() and 0x55FFFFFF)
             appsRow.addView(divider, LinearLayout.LayoutParams(ctx.dp(1), (h * 0.58f).toInt()).also {
                 it.leftMargin = ctx.dp(5); it.rightMargin = ctx.dp(5)
             })
@@ -1222,7 +1266,11 @@ class ImeButton(c: Context) : View(c) {
 }
 
 /** kind: 0 back, 1 home, 2 recents */
-fun View.barFg(): Int = Colors.text(context)
+fun View.barFg(): Int {
+    var p: android.view.ViewParent? = parent
+    while (p != null) { if (p is TaskbarView) return p.ink(); p = p.parent }
+    return Colors.text(context)
+}
 
 /**
  * The app strip: only whole icons are visible at rest. The strip is as wide as a whole number of icons and, after a drag or

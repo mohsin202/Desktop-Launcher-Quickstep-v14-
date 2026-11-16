@@ -47,6 +47,8 @@ object Prefs {
     const val K_PILL = "pillBar"
     /** Flat taskbar: transparent, so it takes the colour of the app behind it (on) or keeps the Material You colour (off). */
     const val K_BAR_CLEAR = "barClear"
+    /** Strength of the transparent bar's scrim, 0..100 %. */
+    const val K_BAR_SCRIM = "barScrim"
     const val K_WINSIZE = "winsize"
     const val K_FFHACK = "ffhack"
     const val K_IME = "imebtn"
@@ -91,6 +93,7 @@ object Prefs {
     fun setLayoutMode(c: Context, v: Int) { sp(c).edit().putInt("layout", v).apply(); Bus.fire() }
 
     fun tbDp(c: Context) = sp(c).getInt(K_TBH, 48)
+    fun scrim(c: Context) = sp(c).getInt(K_BAR_SCRIM, 25).coerceIn(0, 100)
     fun setTbDp(c: Context, v: Int) { sp(c).edit().putInt(K_TBH, v).apply(); Bus.fire() }
 
     fun list(c: Context, k: String): List<String> =
