@@ -46,7 +46,8 @@ interface TaskbarHost {
     val imeShown: Boolean
     fun pickIme()
     /** Gesture navigation: the hidden (transient) taskbar. */
-    fun expandBar() {}
+    fun expandBar(hover: Boolean = false) {}
+    fun barHover(inside: Boolean) {}
     fun barTouched() {}
     fun barOutside() {}
     fun appLaunched() {}
@@ -98,33 +99,116 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
     private var expanded = false
     /** The Recents screen is showing: the taskbar stays visible there. */
     private var inRecents = false
-    private fun floatingNow() = gest() && expanded
     fun recentsVisible(v: Boolean) {
         inRecents = v
-        if (v) { if (gest()) setExpanded(true) } else setExpanded(false)
+        if (v) { if (autoHide()) setExpanded(true) } else setExpanded(false)
     }
     private val stashRun = Runnable { if (drawer == null) setExpanded(false) }
     private fun gest() = NavMode.gesture(this)
     private fun stripPx() = uctx.dp(24)
-    private fun collapsedNow() = gest() && !expanded
+    /** Gesture navigation with "Auto-hide taskbar" on: the bar hides in a thin strip. Off: the pill is always shown. */
+    private fun autoHide() = gest() && Prefs.bool(this, Prefs.K_AUTOHIDE, true)
+    private fun collapsedNow() = autoHide() && !expanded
+    /** Floating pill: always (gesture, auto-hide off / three buttons with the pill option), or while swiped up. */
+    private fun floatingNow() = if (gest()) (!autoHide() || expanded) else Prefs.bool(this, Prefs.K_PILL, false)
     /** Height (width on a side edge) of the bar window now. */
     private fun winThick() = if (collapsedNow()) stripPx() else uctx.dp(Prefs.tbDp(this))
     /** Space reserved for apps: in gesture mode only the strip, the shown taskbar floats over the app. */
-    private fun insetThick() = if (gest()) stripPx() else uctx.dp(Prefs.tbDp(this))
+    private fun insetThick() = if (autoHide()) stripPx()
+        else if (floatingNow()) uctx.dp(Prefs.tbDp(this)) + 2 * uctx.dp(12)   // equal gap above and below the pill
+        else uctx.dp(Prefs.tbDp(this))
 
     fun setExpanded(on: Boolean) {
         handler.removeCallbacks(stashRun)
-        if (!gest()) { expanded = false; return }
+        if (!autoHide()) { expanded = false; hoverOpened = false; return }
         if (!on && inRecents) return
         if (on && drawer == null && !inRecents) handler.postDelayed(stashRun, 5000)
         if (expanded == on) return
         expanded = on
+        if (!on) hoverOpened = false
         applyWindow()
+        scheduleSample()
     }
-    override fun expandBar() { setExpanded(true) }
+    private var hoverOpened = false
+    override fun expandBar(hover: Boolean) { if (!expanded) hoverOpened = hover; setExpanded(true) }
+    /** The mouse is over / left the shown taskbar: it stays while the pointer is on it and goes shortly after the pointer leaves. */
+    override fun barHover(inside: Boolean) {
+        if (!expanded || drawer != null || inRecents) return
+        handler.removeCallbacks(stashRun)
+        if (!inside) handler.postDelayed(stashRun, if (hoverOpened) 2000 else 5000)
+    }
     override fun barTouched() { if (expanded && drawer == null && !inRecents) { handler.removeCallbacks(stashRun); handler.postDelayed(stashRun, 5000) } }
     override fun barOutside() { if (expanded && drawer == null) setExpanded(false) }
-    override fun appLaunched() { if (gest()) { if (drawer != null) closeDrawer(); setExpanded(false) } }
+    override fun appLaunched() { if (autoHide()) { if (drawer != null) closeDrawer(); setExpanded(false) } }
+
+    // ---- Colour of the gesture handle: light on a dark background, grey on a light one ----
+    private var sampleQueued = false
+    private var sampleBusy = false
+    private var lastSample = 0L
+    private val sampleRun = Runnable { sampleQueued = false; sampleHandle() }
+    private fun themeDark() = (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+        android.content.res.Configuration.UI_MODE_NIGHT_YES
+
+    private fun scheduleSample() {
+        if (sampleQueued || !collapsedNow() || !barShown) return
+        sampleQueued = true
+        handler.postDelayed(sampleRun, (lastSample + 1200 - SystemClock.uptimeMillis()).coerceAtLeast(200))
+    }
+
+    private fun sampleHandle() {
+        val b = bar ?: return
+        if (!collapsedNow() || !barShown || sampleBusy) return
+        val pm = getSystemService(android.os.PowerManager::class.java)
+        if (pm != null && !pm.isInteractive) return
+        if (android.os.Build.VERSION.SDK_INT < 30) { b.setHandleDark(themeDark()); return }
+        sampleBusy = true; lastSample = SystemClock.uptimeMillis()
+        try {
+            takeScreenshot(android.view.Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
+                override fun onSuccess(r: ScreenshotResult) {
+                    var dark = themeDark()
+                    try {
+                        val hb = r.hardwareBuffer
+                        val hw = Bitmap.wrapHardwareBuffer(hb, r.colorSpace)
+                        if (hw != null) { dark = stripDark(hw) ?: dark; hw.recycle() }
+                        hb.close()
+                    } catch (t: Throwable) { Log.w("DesktopTaskbar", "Handle colour: $t") }
+                    sampleBusy = false
+                    bar?.setHandleDark(dark)
+                    // the page behind may change without any window event: look again in a few seconds
+                    sampleQueued = true; handler.postDelayed(sampleRun, 3000)
+                }
+                override fun onFailure(errorCode: Int) { sampleBusy = false; bar?.setHandleDark(themeDark()) }
+            })
+        } catch (t: Throwable) { sampleBusy = false; b.setHandleDark(themeDark()) }
+    }
+
+    /** True when the screen next to the strip (left and right of the handle) is dark. */
+    private fun stripDark(src: Bitmap): Boolean? {
+        val w = src.width; val h = src.height
+        val s = stripPx().coerceAtMost(minOf(w, h) / 4)
+        val rects = ArrayList<android.graphics.Rect>()
+        when (barSide) {
+            0 -> { rects += android.graphics.Rect(w / 20, h - s, w * 7 / 20, h); rects += android.graphics.Rect(w * 13 / 20, h - s, w * 19 / 20, h) }
+            1 -> { rects += android.graphics.Rect(0, h / 20, s, h * 7 / 20); rects += android.graphics.Rect(0, h * 13 / 20, s, h * 19 / 20) }
+            else -> { rects += android.graphics.Rect(w - s, h / 20, w, h * 7 / 20); rects += android.graphics.Rect(w - s, h * 13 / 20, w, h * 19 / 20) }
+        }
+        var sum = 0.0; var n = 0
+        for (r in rects) {
+            if (r.width() <= 0 || r.height() <= 0) continue
+            val part = Bitmap.createBitmap(src, r.left, r.top, r.width(), r.height())
+            val soft = part.copy(Bitmap.Config.ARGB_8888, false) ?: continue
+            val px = IntArray(soft.width * soft.height)
+            soft.getPixels(px, 0, soft.width, 0, 0, soft.width, soft.height)
+            var i = 0
+            while (i < px.size) {
+                val c = px[i]
+                sum += (0.299 * ((c shr 16) and 255) + 0.587 * ((c shr 8) and 255) + 0.114 * (c and 255)) / 255.0
+                n++; i += 5
+            }
+            soft.recycle(); if (part !== src) part.recycle()
+        }
+        return if (n == 0) null else (sum / n) < 0.5
+    }
 
     private fun fullLen(side: Int) = if (side == 0) screenBounds().width() else screenBounds().height()
 
@@ -425,12 +509,13 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
             val b = bar
             if (b != null && side != 0) {
                 val lp = b.layoutParams as? WindowManager.LayoutParams
-                if (lp != null && lp.width != winThick()) { removeBar(); addBar() } else if (refresh) b.refresh()
+                if (lp != null && lp.width != winThick()) { removeBar(); addBar() } else if (refresh) { b.refresh(); applyWindow() }
             } else if (b == null) addBar() else {
                 val lp = b.layoutParams as? WindowManager.LayoutParams
                 if (lp != null && (refresh || lp.height != winThick())) {
                     lp.height = winThick()
                     b.setMode(collapsedNow(), lp.height)
+                    place(lp, b, 0)
                     if (navMode) NavWindow.provideInsets(lp, 0, insetThick(), uctx.dp(48))
                     Blur.apply(lp, uctx, 24)
                     try { wm.updateViewLayout(b, lp) } catch (t: Throwable) {
@@ -440,6 +525,7 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
                 if (refresh) b.refresh()
             }
             setBarShown(vis)
+            scheduleSample()
         } catch (e: Exception) {
             Log.e("DesktopTaskbar", "Taskbar sync failed", e)
             removeBar()
@@ -522,14 +608,14 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
                 lp.gravity = if (side == 0) Gravity.BOTTOM else Gravity.TOP or (if (side == 2) Gravity.END else Gravity.START)
                 lp.setFitInsetsTypes(0)
                 lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
-                if (gest()) place(lp, v!!, side)
+                place(lp, v!!, side)
                 if (nav) {
                     NavWindow.prepare(lp)
                     NavWindow.provideInsets(lp, side, insetThick(), uctx.dp(48))
                 } else {
                     // not under the punch hole or a side navigation bar in landscape
                     val si = Insets.safe(uctx)
-                    if (!gest() && side == 0 && si.left + si.right > 0) {
+                    if (!floatingNow() && side == 0 && si.left + si.right > 0) {
                         lp.width = screenBounds().width() - si.left - si.right
                         lp.x = (si.left - si.right) / 2
                     }
@@ -587,12 +673,12 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
 
     fun openDrawer() {
         if (drawer != null) return
-        if (gest() && !expanded && bar != null) setExpanded(true)
+        if (autoHide() && !expanded && bar != null) setExpanded(true)
         val gap = if (floatingNow()) uctx.dp(12) else 0
         val barH = if (bar != null && barSide == 0) winThick() + gap else 0
         val barW = if (bar != null && barSide != 0) winThick() + gap else 0
         val screenH = screenBounds().height()
-        val d = DrawerView(uctx, uctx.dp(8), false, if (barW > 0) barSide else 0) { closeDrawer() }
+        val d = DrawerView(uctx, uctx.dp(if (floatingNow()) 12 else 8), false, if (barW > 0) barSide else 0, floatingNow() && barW == 0) { closeDrawer() }
         d.dragHook = { on ->
             // while an icon is carried, the drawer window lets touches / drops through to the desktop
             try {
@@ -656,6 +742,10 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
     private var collapsed = collapsed0
     private var thickPx = if (thick0 > 0) thick0 else ctx.dp(Prefs.tbDp(ctx))
     private val handleV = View(ctx)
+    private var handleDark = true
+    private var gMouse = false
+    private var hoverPending = false
+    private val hoverRun = Runnable { hoverPending = false; if (collapsed) svc.expandBar(true) }
     private var lenPx = len
     private var reserveNow = 0
     /** Called after the icons were rebuilt (the pill's width follows). */
@@ -714,17 +804,52 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
         refresh()
     }
 
+    /** The bar is drawn as a floating pill: gesture navigation (when shown) or the pill option with three buttons. */
+    private fun floatingShape() = showNav && !collapsed && (NavMode.gesture(ctx) || Prefs.bool(ctx, Prefs.K_PILL, false))
+
     /** Gesture mode: collapsed = only the thin strip with the handle, otherwise the whole taskbar. */
     fun setMode(c: Boolean, t: Int) {
         val changed = c != collapsed || t != thickPx
         collapsed = c; thickPx = t
+        if (!c) { handleV.animate().cancel(); handleV.scaleX = 1f; handleV.scaleY = 1f }
         body?.let {
             val l = it.layoutParams; l.height = t; it.layoutParams = l
             if (side == 1) it.translationX = t.toFloat()
-            val p = if (c || !NavMode.gesture(ctx)) inset else 0   // the pill floats clear of the status bar
+            val p = if (!c && floatingShape()) 0 else inset   // the pill floats clear of the status bar
             it.setPadding(if (side == 1) p else 0, 0, if (side == 2) p else 0, 0)
         }
         if (changed) refresh()
+    }
+
+    /** Dark background behind the strip = light handle, light background = grey handle. */
+    fun setHandleDark(d: Boolean) {
+        if (d == handleDark) return
+        handleDark = d
+        if (collapsed) handleV.background = Colors.rounded(if (d) 0xDDFFFFFF.toInt() else 0xCC4A4A4A.toInt(), ctx.dp(2).toFloat())
+    }
+
+    /** The handle gets a little thicker while a finger or the mouse is on it, like the system one. */
+    private fun widen(on: Boolean) {
+        handleV.animate().cancel()
+        handleV.animate().scaleX(if (on) 1.35f else 1f).scaleY(if (on) 2f else 1f).setDuration(120).start()
+    }
+
+    override fun dispatchHoverEvent(ev: android.view.MotionEvent): Boolean {
+        if (showNav && NavMode.gesture(ctx)) {
+            when (ev.actionMasked) {
+                android.view.MotionEvent.ACTION_HOVER_ENTER, android.view.MotionEvent.ACTION_HOVER_MOVE -> {
+                    if (collapsed) {
+                        widen(true)
+                        if (!hoverPending) { hoverPending = true; postDelayed(hoverRun, 300) }
+                    } else svc.barHover(true)
+                }
+                android.view.MotionEvent.ACTION_HOVER_EXIT -> {
+                    hoverPending = false; removeCallbacks(hoverRun)
+                    if (collapsed) widen(false) else svc.barHover(false)
+                }
+            }
+        }
+        return super.dispatchHoverEvent(ev)
     }
 
     /** Length along the screen edge (the pill is as long as its icons). */
@@ -791,6 +916,8 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
         when (ev.actionMasked) {
             android.view.MotionEvent.ACTION_DOWN -> {
                 gx = ev.rawX; gy = ev.rawY; gActive = false
+                gMouse = ev.getToolType(0) == android.view.MotionEvent.TOOL_TYPE_MOUSE
+                if (collapsed) widen(true)
                 gVt?.recycle(); gVt = android.view.VelocityTracker.obtain().also { it.addMovement(ev) }
                 return true
             }
@@ -806,6 +933,11 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
         if (ev.actionMasked == android.view.MotionEvent.ACTION_UP || ev.actionMasked == android.view.MotionEvent.ACTION_CANCEL) {
             val was = gActive
             gActive = false
+            if (collapsed) {
+                if (!hoverPending) widen(false)
+                // a mouse click on the strip shows the taskbar at once
+                if (!was && gMouse && ev.actionMasked == android.view.MotionEvent.ACTION_UP) svc.expandBar()
+            }
             val vt = gVt; gVt = null
             vt?.addMovement(ev)
             vt?.computeCurrentVelocity(1000)
@@ -849,14 +981,14 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
             if (body != null) body.background = null else background = null
             center.removeAllViews(); right.removeAllViews(); appsRow.removeAllViews()
             center.visibility = View.GONE; right.visibility = View.GONE
-            handleV.background = Colors.rounded(0xCCFFFFFF.toInt(), ctx.dp(2).toFloat())
+            handleV.background = Colors.rounded(if (handleDark) 0xDDFFFFFF.toInt() else 0xCC4A4A4A.toInt(), ctx.dp(2).toFloat())
             handleV.visibility = View.VISIBLE
             return
         }
         handleV.visibility = View.GONE
         center.visibility = View.VISIBLE
         val barCol = Colors.taskbar(ctx)
-        val floating = showNav && NavMode.gesture(ctx)
+        val floating = floatingShape()
         val bg = if (pill) Colors.panel(ctx, barCol, ctx.dp(28).toFloat())
                  else if (floating) Colors.panel(ctx, barCol, thickPx / 2f)
                  else android.graphics.drawable.ColorDrawable(barCol)

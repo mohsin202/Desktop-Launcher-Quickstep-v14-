@@ -53,7 +53,9 @@ class Result(
  */
 class DrawerView(private val c: Context, private val bottomMargin: Int, private val wide: Boolean = false,
                  /** 0 = normal; 1 / 2 = a vertical taskbar sits on the left / right edge and the panel hugs it. */
-                 private val barSide: Int = 0, private val onClose: () -> Unit) : FrameLayout(c) {
+                 private val barSide: Int = 0,
+                 /** A floating taskbar pill is showing: the panel sits in the middle above it. */
+                 private val centre: Boolean = false, private val onClose: () -> Unit) : FrameLayout(c) {
     val search = EditText(c)
     /** Set by the host: may a drag to the desktop start now (the desktop must be showing behind the drawer)? */
     var canDrag: () -> Boolean = { true }
@@ -189,7 +191,7 @@ class DrawerView(private val c: Context, private val bottomMargin: Int, private 
         panel.isClickable = true
         // Portrait (and phone mode): centred. Landscape desktop: starts near the drawer button.
         val portrait = dm.heightPixels > dm.widthPixels
-        val centred = (wide || portrait) && barSide == 0
+        val centred = (wide || portrait || centre) && barSide == 0
         centredMode = centred
         setWillNotDraw(false)
         val lp = LayoutParams(pw, ph, when {

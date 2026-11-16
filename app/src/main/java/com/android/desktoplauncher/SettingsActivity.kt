@@ -654,6 +654,10 @@ class SettingsActivity : Activity() {
         addSetting(sb)
         note(UiText.text(this, "The taskbar is the navigation bar: apps stay above it. Default height 48 dp."))
         sw(UiText.text(this, "Start the taskbar service automatically"), Prefs.K_AUTO_A11Y, true)
+        sw(UiText.text(this, "Auto-hide taskbar (gesture navigation)"), Prefs.K_AUTOHIDE, true)
+        note(UiText.text(this, "Off: the taskbar pill is always shown and apps stay above it."))
+        sw(UiText.text(this, "Pill-shaped taskbar (three-button navigation)"), Prefs.K_PILL, false)
+        note(UiText.text(this, "The bar becomes a floating pill; apps do not go behind it."))
         permSw(UiText.text(this, "Taskbar service (Accessibility)"), TaskbarService.instance != null) { go(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
     }
 

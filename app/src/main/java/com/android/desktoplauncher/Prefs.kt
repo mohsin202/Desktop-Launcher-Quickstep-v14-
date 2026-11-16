@@ -41,6 +41,10 @@ object Prefs {
     const val K_REC_MEM = "recMem"
     /** The Quickstep build switches its own taskbar service on (needs WRITE_SECURE_SETTINGS). */
     const val K_AUTO_A11Y = "autoA11y"
+    /** Gesture navigation: the taskbar hides in a thin strip (on) or is always shown as a pill (off). */
+    const val K_AUTOHIDE = "autoHideBar"
+    /** Three-button navigation: draw the taskbar as a floating pill. */
+    const val K_PILL = "pillBar"
     const val K_WINSIZE = "winsize"
     const val K_FFHACK = "ffhack"
     const val K_IME = "imebtn"
