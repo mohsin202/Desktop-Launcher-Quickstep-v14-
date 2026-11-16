@@ -658,6 +658,8 @@ class SettingsActivity : Activity() {
         note(UiText.text(this, "Off: the taskbar pill is always shown and apps stay above it."))
         sw(UiText.text(this, "Pill-shaped taskbar (three-button navigation)"), Prefs.K_PILL, false)
         note(UiText.text(this, "The bar becomes a floating pill; apps do not go behind it."))
+        sw(UiText.text(this, "Keep apps clear of the taskbar (wallpaper backdrop)"), Prefs.K_BACKDROP, true)
+        note(UiText.text(this, "Apps stop above the pill; the wallpaper shows behind it. Off: apps draw behind the bar and only keep their content above it."))
         permSw(UiText.text(this, "Taskbar service (Accessibility)"), TaskbarService.instance != null) { go(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
     }
 
