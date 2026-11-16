@@ -45,6 +45,11 @@ interface TaskbarHost {
     fun openSearch()
     val imeShown: Boolean
     fun pickIme()
+    /** Gesture navigation: the hidden (transient) taskbar. */
+    fun expandBar() {}
+    fun barTouched() {}
+    fun barOutside() {}
+    fun appLaunched() {}
 }
 
 class TaskbarService : AccessibilityService(), TaskbarHost {
@@ -89,9 +94,45 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
     /** Apps the user hid from the taskbar; they only come back when they are opened again. */
     private val dismissed = HashSet<String>()
     private val handler = Handler(Looper.getMainLooper())
+    // ---- Gesture navigation: the taskbar hides in a thin strip (the gesture handle) and swipes up on demand ----
+    private var expanded = false
+    private val stashRun = Runnable { if (drawer == null) setExpanded(false) }
+    private fun gest() = NavMode.gesture(this)
+    private fun stripPx() = uctx.dp(24)
+    private fun collapsedNow() = gest() && !expanded
+    /** Height (width on a side edge) of the bar window now. */
+    private fun winThick() = if (collapsedNow()) stripPx() else uctx.dp(Prefs.tbDp(this))
+    /** Space reserved for apps: in gesture mode only the strip, the shown taskbar floats over the app. */
+    private fun insetThick() = if (gest()) stripPx() else uctx.dp(Prefs.tbDp(this))
+
+    fun setExpanded(on: Boolean) {
+        handler.removeCallbacks(stashRun)
+        if (!gest()) { expanded = false; return }
+        if (on && drawer == null) handler.postDelayed(stashRun, 5000)
+        if (expanded == on) return
+        expanded = on
+        applyWindow()
+    }
+    override fun expandBar() { setExpanded(true) }
+    override fun barTouched() { if (expanded && drawer == null) { handler.removeCallbacks(stashRun); handler.postDelayed(stashRun, 5000) } }
+    override fun barOutside() { if (expanded && drawer == null) setExpanded(false) }
+    override fun appLaunched() { if (gest()) { if (drawer != null) closeDrawer(); setExpanded(false) } }
+
+    private fun applyWindow() {
+        val b = bar ?: return
+        try {
+            val lp = b.layoutParams as WindowManager.LayoutParams
+            val t = winThick()
+            if (barSide != 0) lp.width = t else lp.height = t
+            if (navMode) NavWindow.provideInsets(lp, barSide, insetThick(), uctx.dp(48))
+            b.setMode(collapsedNow(), t)
+            wm.updateViewLayout(b, lp)
+        } catch (e: Throwable) { Log.e("DesktopTaskbar", "Could not resize taskbar", e) }
+    }
+
     /** Navigation mode changed (three buttons <-> gestures): rebuild the bar's buttons. */
     private val navObserver = object : android.database.ContentObserver(Handler(Looper.getMainLooper())) {
-        override fun onChange(selfChange: Boolean) { bar?.refresh() }
+        override fun onChange(selfChange: Boolean) { expanded = false; handler.removeCallbacks(stashRun); sync() }
     }
 
     /** Called when SystemUI connects (TouchInteractionService): tell it the taskbar is the navigation bar. */
@@ -234,7 +275,7 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
         // As a system app the list comes from the system itself (the Recents list): an app is "running" exactly while its task exists.
         if (syncTasks(fg)) {
             var c2 = taskCh
-            if (fg != focused) { focused = fg; c2 = true }
+            if (fg != focused) { if (expanded && drawer == null) handler.post { setExpanded(false) }; focused = fg; c2 = true }
             val ime0 = imeWin || editing
             if (ime0 != imeShown) { imeShown = ime0; c2 = true }
             if (c2) bar?.refresh()
@@ -250,7 +291,7 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
             if (running.add(p)) changed = true
         }
         while (running.size > 10) { running.remove(running.first()); changed = true }
-        if (fg != focused) { focused = fg; changed = true }
+        if (fg != focused) { if (expanded && drawer == null) handler.post { setExpanded(false) }; focused = fg; changed = true }
         val ime = imeWin || editing
         if (ime != imeShown) { imeShown = ime; changed = true }
         if (changed) bar?.refresh()
@@ -336,12 +377,13 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
             val b = bar
             if (b != null && side != 0) {
                 val lp = b.layoutParams as? WindowManager.LayoutParams
-                if (lp != null && lp.width != uctx.dp(Prefs.tbDp(this))) { removeBar(); addBar() } else if (refresh) b.refresh()
+                if (lp != null && lp.width != winThick()) { removeBar(); addBar() } else if (refresh) b.refresh()
             } else if (b == null) addBar() else {
                 val lp = b.layoutParams as? WindowManager.LayoutParams
-                if (lp != null && (refresh || lp.height != uctx.dp(Prefs.tbDp(this)))) {
-                    lp.height = uctx.dp(Prefs.tbDp(this))
-                    if (navMode) NavWindow.provideInsets(lp, 0, lp.height, uctx.dp(48))
+                if (lp != null && (refresh || lp.height != winThick())) {
+                    lp.height = winThick()
+                    b.setMode(collapsedNow(), lp.height)
+                    if (navMode) NavWindow.provideInsets(lp, 0, insetThick(), uctx.dp(48))
                     Blur.apply(lp, uctx, 24)
                     try { wm.updateViewLayout(b, lp) } catch (t: Throwable) {
                         Log.e("DesktopTaskbar", "Could not update taskbar window", t)
@@ -361,7 +403,7 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
      * bottom edge when the phone is turned: that is the right or left edge in landscape, and the icons turn to stay upright.
      */
     private fun navSide(): Int = try {
-        if (resources.configuration.smallestScreenWidthDp >= 600) 0
+        if (!gest() && resources.configuration.smallestScreenWidthDp >= 600) 0
         else when (wm.defaultDisplay.rotation) {
             android.view.Surface.ROTATION_90 -> 2
             android.view.Surface.ROTATION_270 -> 1
@@ -414,10 +456,10 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
         var v: TaskbarView? = null
         try {
             val side = navSide()
-            val thick = uctx.dp(Prefs.tbDp(this))
+            val thick = winThick()
             val top = if (side != 0) statusTop() else 0
             val len = screenBounds().height()
-            v = TaskbarView(uctx, this, true, false, side, len, top)
+            v = TaskbarView(uctx, this, true, false, side, len, top, collapsedNow(), thick)
             fun params(nav: Boolean): WindowManager.LayoutParams {
                 val lp = WindowManager.LayoutParams(
                     if (side != 0) thick else MATCH, if (side != 0) len else thick,
@@ -425,7 +467,8 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
                     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                         WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                         WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
-                        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                        WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
                     PixelFormat.TRANSLUCENT
                 )
                 lp.gravity = if (side == 0) Gravity.BOTTOM else Gravity.TOP or (if (side == 2) Gravity.END else Gravity.START)
@@ -433,7 +476,7 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
                 lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
                 if (nav) {
                     NavWindow.prepare(lp)
-                    NavWindow.provideInsets(lp, side, thick, uctx.dp(48))
+                    NavWindow.provideInsets(lp, side, insetThick(), uctx.dp(48))
                 } else {
                     // not under the punch hole or a side navigation bar in landscape
                     val si = Insets.safe(uctx)
@@ -494,8 +537,9 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
 
     fun openDrawer() {
         if (drawer != null) return
-        val barH = if (bar != null && barSide == 0) uctx.dp(Prefs.tbDp(this)) else 0
-        val barW = if (bar != null && barSide != 0) uctx.dp(Prefs.tbDp(this)) else 0
+        if (gest() && !expanded && bar != null) setExpanded(true)
+        val barH = if (bar != null && barSide == 0) winThick() else 0
+        val barW = if (bar != null && barSide != 0) winThick() else 0
         val screenH = screenBounds().height()
         val d = DrawerView(uctx, uctx.dp(8), false, if (barW > 0) barSide else 0) { closeDrawer() }
         d.dragHook = { on ->
@@ -524,6 +568,7 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
         // Do not use BLUR_BEHIND on this full-screen touch layer: Android blurs the entire
         // app area and some ROMs also stop dispatching touches. The panel itself is translucent.
         try { wm.addView(d, lp); drawer = d; d.post { d.onShown() }; LauncherActivity.blurFromOverlay(true) } catch (_: Exception) {}
+        handler.removeCallbacks(stashRun)   // the taskbar stays while the drawer is open
         raiseBar()
     }
 
@@ -548,13 +593,18 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
         drawer?.let { try { wm.removeView(it) } catch (_: Exception) {} }
         drawer = null
         LauncherActivity.blurFromOverlay(false)
+        if (expanded) setExpanded(false)   // after the drawer: hide the taskbar, the gesture handle returns
     }
 
     fun isDrawerOpen() = drawer != null
 }
 
 class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, private val showNav: Boolean, private val pill: Boolean,
-                  private val side: Int = 0, private val len: Int = 0, private val inset: Int = 0) : FrameLayout(ctx) {
+                  private val side: Int = 0, private val len: Int = 0, private val inset: Int = 0,
+                  collapsed0: Boolean = false, thick0: Int = 0) : FrameLayout(ctx) {
+    private var collapsed = collapsed0
+    private var thickPx = if (thick0 > 0) thick0 else ctx.dp(Prefs.tbDp(ctx))
+    private val handleV = View(ctx)
     /**
      * Side mode: the whole bar is laid out horizontally in [body] (len x thickness) and turned 90 degrees so it lies along the
      * screen edge; the icons are turned back, so they stay upright like the system navigation buttons do.
@@ -595,8 +645,9 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
             it.leftMargin = ctx.dp(4)
         })
         host.addView(right, LayoutParams(WRAP, MATCH, Gravity.END).also { it.rightMargin = ctx.dp(8) })
+        host.addView(handleV, LayoutParams(ctx.dp(108), ctx.dp(4), Gravity.CENTER))
         if (body != null) {
-            val thick = ctx.dp(Prefs.tbDp(ctx))
+            val thick = thickPx
             body.pivotX = 0f; body.pivotY = 0f
             // Left edge (device top to the right): the bar reads top to bottom. Right edge: bottom to top, like the system buttons.
             if (side == 1) { body.rotation = 90f; body.translationX = thick.toFloat() }
@@ -606,6 +657,25 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
             addView(body, LayoutParams(len, thick))
         }
         refresh()
+    }
+
+    /** Gesture mode: collapsed = only the thin strip with the handle, otherwise the whole taskbar. */
+    fun setMode(c: Boolean, t: Int) {
+        val changed = c != collapsed || t != thickPx
+        collapsed = c; thickPx = t
+        body?.let {
+            val l = it.layoutParams; l.height = t; it.layoutParams = l
+            if (side == 1) it.translationX = t.toFloat()
+        }
+        if (changed) refresh()
+    }
+
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        if (showNav && NavMode.gesture(ctx)) {
+            if (ev.actionMasked == android.view.MotionEvent.ACTION_OUTSIDE) { svc.barOutside(); return true }
+            svc.barTouched()
+        }
+        return super.dispatchTouchEvent(ev)
     }
 
     /** Back / Home / Recents buttons are shown in the taskbar with three-button navigation; in gesture navigation they are swipes. */
@@ -640,20 +710,43 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
     }
 
     override fun onTouchEvent(ev: android.view.MotionEvent): Boolean {
-        if (!gActive) return super.onTouchEvent(ev)
-        gVt?.addMovement(ev)
+        if (!showNav || !NavMode.gesture(ctx)) return super.onTouchEvent(ev)
+        when (ev.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN -> {
+                gx = ev.rawX; gy = ev.rawY; gActive = false
+                gVt?.recycle(); gVt = android.view.VelocityTracker.obtain().also { it.addMovement(ev) }
+                return true
+            }
+            android.view.MotionEvent.ACTION_MOVE -> {
+                gVt?.addMovement(ev)
+                if (!gActive) {
+                    val d = inward(ev.rawX, ev.rawY); val o = Math.abs(across(ev.rawX, ev.rawY))
+                    if (d > gSlop * 2 && d > o * 1.5f) gActive = true
+                }
+                return true
+            }
+        }
         if (ev.actionMasked == android.view.MotionEvent.ACTION_UP || ev.actionMasked == android.view.MotionEvent.ACTION_CANCEL) {
+            val was = gActive
             gActive = false
             val vt = gVt; gVt = null
+            vt?.addMovement(ev)
             vt?.computeCurrentVelocity(1000)
             val speed = when (side) { 1 -> vt?.xVelocity ?: 0f; 2 -> -(vt?.xVelocity ?: 0f); else -> -(vt?.yVelocity ?: 0f) }
             vt?.recycle()
             val dist = inward(ev.rawX, ev.rawY)
-            if (ev.actionMasked == android.view.MotionEvent.ACTION_UP && dist >= ctx.dp(24)) {
-                performHapticFeedback(android.view.HapticFeedbackConstants.GESTURE_END)
-                // far and slow (swipe up and hold) = Recents, otherwise Home
-                if (dist >= ctx.dp(110) && speed < 600f) svc.global(AccessibilityService.GLOBAL_ACTION_RECENTS)
-                else svc.global(AccessibilityService.GLOBAL_ACTION_HOME)
+            if (was && ev.actionMasked == android.view.MotionEvent.ACTION_UP) {
+                if (collapsed) {
+                    // thin strip: a light swipe shows the taskbar; a long slow one = Recents; a long fast one = Home
+                    performHapticFeedback(android.view.HapticFeedbackConstants.GESTURE_END)
+                    if (dist >= ctx.dp(110) && speed < 600f) svc.global(AccessibilityService.GLOBAL_ACTION_RECENTS)
+                    else if (dist >= ctx.dp(80) && speed >= 800f) svc.global(AccessibilityService.GLOBAL_ACTION_HOME)
+                    else svc.expandBar()
+                } else if (dist >= ctx.dp(24)) {
+                    performHapticFeedback(android.view.HapticFeedbackConstants.GESTURE_END)
+                    if (dist >= ctx.dp(110) && speed < 600f) svc.global(AccessibilityService.GLOBAL_ACTION_RECENTS)
+                    else svc.global(AccessibilityService.GLOBAL_ACTION_HOME)
+                }
             }
         }
         return true
@@ -674,6 +767,17 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
         RippleDrawable(ColorStateList.valueOf(0x33000000), null, Colors.rounded(0xFFFFFFFF.toInt(), ctx.dp(10).toFloat()))
 
     fun refresh() {
+        if (collapsed) {
+            // only the gesture handle
+            if (body != null) body.background = null else background = null
+            center.removeAllViews(); right.removeAllViews(); appsRow.removeAllViews()
+            center.visibility = View.GONE; right.visibility = View.GONE
+            handleV.background = Colors.rounded(0xCCFFFFFF.toInt(), ctx.dp(2).toFloat())
+            handleV.visibility = View.VISIBLE
+            return
+        }
+        handleV.visibility = View.GONE
+        center.visibility = View.VISIBLE
         val barCol = Colors.taskbar(ctx)
         val bg = if (pill) Colors.panel(ctx, barCol, ctx.dp(28).toFloat()) else android.graphics.drawable.ColorDrawable(barCol)
         if (body != null) body.background = bg else background = bg
@@ -800,7 +904,7 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
             f.addView(line, FrameLayout.LayoutParams(ctx.dp(if (active) 18 else 6), ctx.dp(3), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
                 .also { it.bottomMargin = ctx.dp(3) })
         }
-        f.setOnClickListener { Launch.app(ctx, comp) }
+        f.setOnClickListener { Launch.app(ctx, comp); svc.appLaunched() }
         val show = { x: Int, y: Int ->
             menu?.dismiss()
             val m = PopupMenuX(ctx, this)
