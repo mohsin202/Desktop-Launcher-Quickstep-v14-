@@ -56,6 +56,12 @@ object NavWindow {
         fun provider(type: Int): Any {
             val p = ctor.newInstance(owner, 0, type)
             pc.getMethod("setInsetsSize", Insets::class.java).invoke(p, size)
+            if (type == WindowInsets.Type.navigationBars()) {
+                // no translucent contrast scrim behind the bar (the system's own navigation bar does the same when it needs none):
+                // InsetsSource.FLAG_SUPPRESS_SCRIM = 1, so the apps / wallpaper show clearly through the transparent part of the band
+                try { pc.getMethod("setFlags", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType).invoke(p, 1, 1) }
+                catch (t: Throwable) { Log.w(TAG, "suppress scrim: $t") }
+            }
             val arr = java.lang.reflect.Array.newInstance(oc, 2)
             java.lang.reflect.Array.set(arr, 0, octor.newInstance(TYPE_INPUT_METHOD, ime))
             java.lang.reflect.Array.set(arr, 1, octor.newInstance(TYPE_VOICE_INTERACTION, size))
