@@ -144,11 +144,12 @@ class RecentsActivity : Activity() {
         val dm = resources.displayMetrics
         // The picture uses up to 70% of the height; header (icon, name, close) above it, same proportions as the screen
         val header = dp(48)
-        val reserve = if (showMem) dp(56) else dp(24)
+        val barRoom = if (com.android.desktoplauncher.NavMode.gesture(this)) dp(56) else 0   // the floating taskbar
+        val reserve = (if (showMem) dp(56) else dp(24)) + barRoom
         val cardH = ((h - header - reserve) * 0.80f).toInt().coerceAtLeast(dp(120))
         val cardW = (cardH * dm.widthPixels.toFloat() / dm.heightPixels).toInt().coerceAtMost(w - dp(48)).coerceAtLeast(dp(120))
         val side = (w - cardW) / 2
-        row.setPadding(side, 0, side, if (showMem) dp(28) else 0)
+        row.setPadding(side, 0, side, (if (showMem) dp(28) else 0) + barRoom)
         val spacing = dp(PAGE_SPACING_DP)
         // newest first in [tasks]; shown newest on the right (left in right-to-left), "Clear all" on the far other end
         val order = if (rtl()) tasks else tasks.reversed()
@@ -253,8 +254,18 @@ class RecentsActivity : Activity() {
     override fun onBackPressed() { leave() }
 
     // Home / another app on top: the screen is not needed any more
-    override fun onStop() { super.onStop(); if (!leaving) { leaving = true; finish() } }
-    override fun onDestroy() { if (current === this) current = null; super.onDestroy() }
+    override fun onStop() {
+        super.onStop()
+        com.android.desktoplauncher.TaskbarService.instance?.recentsVisible(false)
+        if (!leaving) { leaving = true; finish() }
+    }
+    // the taskbar stays visible in Recents (gesture navigation shows it there, like Trebuchet)
+    override fun onResume() { super.onResume(); com.android.desktoplauncher.TaskbarService.instance?.recentsVisible(true) }
+    override fun onDestroy() {
+        if (current === this) current = null
+        com.android.desktoplauncher.TaskbarService.instance?.recentsVisible(false)
+        super.onDestroy()
+    }
 }
 
 /** The row of cards: scrolls sideways, settles on the nearest card, a tap on empty space leaves. */
