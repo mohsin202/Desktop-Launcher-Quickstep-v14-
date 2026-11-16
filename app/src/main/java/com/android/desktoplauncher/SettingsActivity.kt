@@ -658,6 +658,8 @@ class SettingsActivity : Activity() {
         note(UiText.text(this, "Off: the taskbar pill is always shown and apps stay above it."))
         sw(UiText.text(this, "Pill-shaped taskbar (three-button navigation)"), Prefs.K_PILL, false)
         note(UiText.text(this, "The bar becomes a floating pill; apps do not go behind it."))
+        sw(UiText.text(this, "Back gesture from the screen edges (mouse)"), Prefs.K_EDGE_BACK, true)
+        note(UiText.text(this, "Gesture navigation: drag inward from the left or right screen edge with the mouse to go Back. Takes a few dp of the screen edge."))
         sw(UiText.text(this, "Taskbar transparency"), Prefs.K_BAR_CLEAR, true)
         val sh = TextView(this)
         sh.setTextColor(Colors.text(this))

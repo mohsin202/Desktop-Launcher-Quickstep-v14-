@@ -47,6 +47,8 @@ object Prefs {
     const val K_PILL = "pillBar"
     /** Flat taskbar: transparent, so it takes the colour of the app behind it (on) or keeps the Material You colour (off). */
     const val K_BAR_CLEAR = "barClear"
+    /** Gesture navigation: swiping in from the left / right screen edge with the mouse goes Back. */
+    const val K_EDGE_BACK = "edgeBack"
     /** Strength of the transparent bar's scrim, 0..100 %. */
     const val K_BAR_SCRIM = "barScrim"
     const val K_WINSIZE = "winsize"

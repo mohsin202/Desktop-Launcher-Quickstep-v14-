@@ -116,9 +116,32 @@ class TouchInteractionService : Service() {
         super.onCreate()
         // SystemUI binds this service at boot: a good moment to switch the taskbar on, without anyone opening Settings
         AutoStart.ensureTaskbarService(this)
+        registerAllApps()
     }
 
-    override fun onBind(intent: Intent?): IBinder = binder
+    /**
+     * Like the stock Quickstep launcher: tell the accessibility manager what to do for "all apps" (GLOBAL_ACTION_ACCESSIBILITY_ALL_APPS = 14).
+     * PhoneWindowManager asks for exactly this when the Windows / Meta key is pressed alone. Needs MANAGE_ACCESSIBILITY, which the
+     * recents component (config_recentsComponentName = this app) is allowed to hold.
+     */
+    private fun registerAllApps() {
+        allAppsStatus = try {
+            val am = getSystemService(android.view.accessibility.AccessibilityManager::class.java)
+            val pi = android.app.PendingIntent.getBroadcast(this, 14, Intent(this, AllAppsReceiver::class.java),
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE)
+            val ra = android.app.RemoteAction(android.graphics.drawable.Icon.createWithResource(this, applicationInfo.icon),
+                "All apps", "Show all apps", pi)
+            android.view.accessibility.AccessibilityManager::class.java
+                .getMethod("registerSystemAction", android.app.RemoteAction::class.java, Int::class.javaPrimitiveType)
+                .invoke(am, ra, 14)
+            "registered"
+        } catch (t: Throwable) {
+            Log.w(TAG, "all-apps action: $t")
+            "refused: " + (t.cause ?: t).javaClass.simpleName
+        }
+    }
+
+    override fun onBind(intent: Intent?): IBinder { if (allAppsStatus != "registered") registerAllApps(); return binder }
 
     override fun onUnbind(intent: Intent?): Boolean {
         SysUi.set(null)
@@ -126,6 +149,8 @@ class TouchInteractionService : Service() {
     }
 
     companion object {
+        /** Shown in the Freeform test dialog. */
+        @Volatile var allAppsStatus = "not tried"
         private const val TAG = "DesktopQuickstep"
         /** QuickStepContract.KEY_EXTRA_SYSUI_PROXY */
         private const val KEY_SYSUI_PROXY = "extra_sysui_proxy"

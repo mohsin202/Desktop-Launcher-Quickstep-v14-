@@ -454,6 +454,8 @@ object Launch {
         line("Taskbar window", TaskbarService.instance?.let { if (it.navMode) "navigation bar (space reserved)" else "overlay (fallback)" } ?: "not running")
         line("SystemUI connected (Quickstep)", SysUi.connected)
         line("Windows key seen by the taskbar service", TaskbarService.instance?.metaInfo() ?: "service not running")
+        line("System all-apps action (Windows key)", TouchInteractionService.allAppsStatus)
+        line("Edge back gesture windows", TaskbarService.instance?.edgeInfo() ?: "service not running")
         line("Root shell", RootSh.available())
         line("Setting: open apps in freeform", Prefs.bool(c, Prefs.K_FREEFORM, false))
         line("Setting: helper window", Prefs.bool(c, Prefs.K_FFHACK, false))

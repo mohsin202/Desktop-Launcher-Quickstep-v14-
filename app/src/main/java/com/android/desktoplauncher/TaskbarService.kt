@@ -77,7 +77,8 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
     private var metaSeen = 0
     private var metaFocus: String? = null
     private var metaUpAt = 0L
-    fun metaInfo() = "$metaSeen events" + if (metaUpAt != 0L) ", last " + (android.os.SystemClock.uptimeMillis() - metaUpAt) / 1000 + " s ago" else ""
+    private var homeKeySeen = 0
+    fun metaInfo() = "$metaSeen Meta events, $homeKeySeen Home-key events from a keyboard" + if (metaUpAt != 0L) ", last " + (android.os.SystemClock.uptimeMillis() - metaUpAt) / 1000 + " s ago" else ""
 
     /**
      * Called when the home screen comes to the front. If that happens right after the Windows key, the system itself took
@@ -411,7 +412,16 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
             if (e.action == android.view.KeyEvent.ACTION_DOWN && e.repeatCount == 0) metaFocus = focused
             if (e.action == android.view.KeyEvent.ACTION_UP) metaUpAt = android.os.SystemClock.uptimeMillis()
         }
+        // Some keyboard layouts (Android-x86 style) send the Windows key as KEYCODE_HOME: a real keyboard's Home key (deviceId > 0;
+        // our own injected Home has the virtual device) opens the drawer as well, instead of going to the home screen.
+        val homeFromKeyboard = e.keyCode == android.view.KeyEvent.KEYCODE_HOME && e.deviceId > 0 &&
+            (e.source and android.view.InputDevice.SOURCE_KEYBOARD) == android.view.InputDevice.SOURCE_KEYBOARD
+        if (homeFromKeyboard) homeKeySeen++
         if (bar == null || !Prefs.bool(this, Prefs.K_WINKEY, true)) return false
+        if (homeFromKeyboard) {
+            if (e.action == android.view.KeyEvent.ACTION_UP) toggleDrawer()
+            return true
+        }
         if (meta) {
             if (e.action == android.view.KeyEvent.ACTION_DOWN) { if (e.repeatCount == 0) metaAlone = true; return true }
             if (e.action == android.view.KeyEvent.ACTION_UP) {
@@ -570,6 +580,7 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
                 if (refresh) b.refresh()
             }
             setBarShown(vis)
+            syncEdges()
             scheduleSample()
         } catch (e: Exception) {
             Log.e("DesktopTaskbar", "Taskbar sync failed", e)
@@ -713,6 +724,54 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
     private fun removeBar() {
         bar?.let { try { wm.removeView(it) } catch (_: Exception) {} }
         bar = null
+        syncEdges()
+    }
+
+    // ---- Back gesture from the screen edges, for the mouse (SystemUI's own gesture handler only reacts to touch) ----
+    private var edgeL: View? = null
+    private var edgeR: View? = null
+    private var edgeH = 0
+    fun edgeInfo() = if (edgeL != null) "on (2 windows)" else if (!gest()) "off (not gesture navigation)" else if (!Prefs.bool(this, Prefs.K_EDGE_BACK, true)) "off (setting)" else "not shown"
+
+    private inner class EdgeBack(c: Context, private val left: Boolean) : View(c) {
+        private var sx = 0f
+        private var fired = false
+        override fun onTouchEvent(e: android.view.MotionEvent): Boolean {
+            // only the mouse: a finger's edge swipe is already handled by SystemUI (it would go Back twice)
+            if (e.getToolType(0) != android.view.MotionEvent.TOOL_TYPE_MOUSE) return false
+            when (e.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> { sx = e.rawX; fired = false }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    val d = if (left) e.rawX - sx else sx - e.rawX
+                    if (!fired && d > uctx.dp(40)) { fired = true; global(AccessibilityService.GLOBAL_ACTION_BACK) }
+                }
+            }
+            return true
+        }
+    }
+
+    private fun syncEdges() {
+        val want = bar != null && barShown && gest() && Prefs.bool(this, Prefs.K_EDGE_BACK, true)
+        val h = screenBounds().height() - insetThick()
+        if (want && edgeL != null && h == edgeH) return
+        edgeL?.let { try { wm.removeView(it) } catch (_: Exception) {} }
+        edgeR?.let { try { wm.removeView(it) } catch (_: Exception) {} }
+        edgeL = null; edgeR = null
+        if (!want) return
+        edgeH = h
+        for (left in booleanArrayOf(true, false)) {
+            try {
+                val v = EdgeBack(uctx, left)
+                val lp = WindowManager.LayoutParams(uctx.dp(6), h, WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    PixelFormat.TRANSLUCENT)
+                lp.gravity = Gravity.TOP or (if (left) Gravity.START else Gravity.END)
+                lp.title = "DesktopEdgeBack"
+                wm.addView(v, lp)
+                if (left) edgeL = v else edgeR = v
+            } catch (t: Throwable) { Log.w("DesktopTaskbar", "Edge back window: $t") }
+        }
     }
 
     override fun toggleDrawer() { if (drawer != null) closeDrawer() else openDrawer() }
