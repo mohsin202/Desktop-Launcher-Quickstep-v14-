@@ -45,8 +45,6 @@ object Prefs {
     const val K_AUTOHIDE = "autoHideBar"
     /** Three-button navigation: draw the taskbar as a floating pill. */
     const val K_PILL = "pillBar"
-    /** Paint the reserved band (gesture strip / around the pill) with the wallpaper so apps visibly stop above it. */
-    const val K_BACKDROP = "barBackdrop"
     const val K_WINSIZE = "winsize"
     const val K_FFHACK = "ffhack"
     const val K_IME = "imebtn"

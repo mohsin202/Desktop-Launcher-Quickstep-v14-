@@ -514,7 +514,7 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
             val insetVis = systemBarsVisible()
             val vis = insetVis || navWin
             val side = if (insetVis) navSide() else barSide   // always the edge that is the device's own bottom
-            if (bar != null && (barSide != side || backdropSig != sigFor(side))) removeBar()
+            if (bar != null && barSide != side) removeBar()
             val b = bar
             if (b != null && side != 0) {
                 val lp = b.layoutParams as? WindowManager.LayoutParams
@@ -637,12 +637,11 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
             // First the real navigation-bar window (reserves space, like the stock taskbar). If the system refuses it
             // (missing signature permissions) the bar is added as the old accessibility overlay instead.
             var done = false
-            addBackdrop(side)
             if (!NavWindow.refused) {
                 try { wm.addView(v, params(true)); done = true; navMode = true }
                 catch (t: Throwable) { NavWindow.refused = true; Log.w("DesktopTaskbar", "Navigation-bar window refused, using overlay: $t") }
             }
-            if (!done) { removeBackdrop(); wm.addView(v, params(false)); navMode = false }
+            if (!done) { wm.addView(v, params(false)); navMode = false }
             bar = v
             barSide = side
             barShown = true
@@ -677,42 +676,6 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
     private fun removeBar() {
         bar?.let { try { wm.removeView(it) } catch (_: Exception) {} }
         bar = null
-        removeBackdrop()
-    }
-
-    // ---- Backdrop: the band the bar reserves is painted with the wallpaper, so apps visibly stop above the pill / the gesture strip ----
-    private var backdrop: View? = null
-    private var backdropSig = ""
-    private fun sigFor(side: Int): String =
-        if (Prefs.bool(this, Prefs.K_BACKDROP, true) && (autoHide() || floatingNow())) "${insetThick()}/$side" else ""
-
-    private fun removeBackdrop() {
-        backdrop?.let { try { wm.removeView(it) } catch (_: Exception) {} }
-        backdrop = null
-    }
-
-    /** Must be added before the bar: windows of the same layer stack in the order they were added. */
-    private fun addBackdrop(side: Int) {
-        removeBackdrop()
-        backdropSig = sigFor(side)
-        if (backdropSig.isEmpty() || NavWindow.refused) return
-        try {
-            val t = insetThick()
-            val v = BackdropView(uctx)
-            val lp = WindowManager.LayoutParams(
-                if (side != 0) t else MATCH, if (side != 0) MATCH else t, NavWindow.TYPE,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-                PixelFormat.TRANSLUCENT
-            )
-            lp.gravity = if (side == 0) Gravity.BOTTOM else Gravity.TOP or (if (side == 2) Gravity.END else Gravity.START)
-            lp.setFitInsetsTypes(0)
-            lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
-            NavWindow.prepare(lp)
-            lp.title = "DesktopBackdrop"
-            wm.addView(v, lp)
-            backdrop = v
-        } catch (t: Throwable) { Log.w("DesktopTaskbar", "Backdrop not added: $t"); backdrop = null }
     }
 
     override fun toggleDrawer() { if (drawer != null) closeDrawer() else openDrawer() }
@@ -780,34 +743,6 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
     }
 
     fun isDrawerOpen() = drawer != null
-}
-
-/** Draws the wallpaper (cropped like the screen) in the band the taskbar reserves; black until / unless the wallpaper is readable. */
-class BackdropView(c: Context) : View(c) {
-    private var wall: android.graphics.drawable.Drawable? = null
-    private val loc = IntArray(2)
-    init {
-        Thread {
-            val d = try { android.app.WallpaperManager.getInstance(c).drawable } catch (_: Throwable) { null }
-            post { wall = d; invalidate() }
-        }.start()
-    }
-    override fun onDraw(cv: Canvas) {
-        val w = wall
-        if (w == null) { cv.drawColor(0xFF000000.toInt()); return }
-        val b = context.getSystemService(WindowManager::class.java).currentWindowMetrics.bounds
-        val sw = b.width().toFloat(); val sh = b.height().toFloat()
-        val iw = w.intrinsicWidth.coerceAtLeast(1); val ih = w.intrinsicHeight.coerceAtLeast(1)
-        val sc = maxOf(sw / iw, sh / ih)
-        getLocationOnScreen(loc)
-        cv.save()
-        cv.translate(-loc[0].toFloat(), -loc[1].toFloat())
-        cv.translate((sw - iw * sc) / 2f, (sh - ih * sc) / 2f)
-        cv.scale(sc, sc)
-        w.setBounds(0, 0, iw, ih)
-        w.draw(cv)
-        cv.restore()
-    }
 }
 
 class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, private val showNav: Boolean, private val pill: Boolean,
@@ -1091,7 +1026,17 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
         val barCol = Colors.taskbar(ctx)
         val floating = floatingShape()
         val bg = if (pill) Colors.panel(ctx, barCol, ctx.dp(28).toFloat())
-                 else if (floating) Colors.panel(ctx, barCol, ctx.dp(Prefs.tbDp(ctx)) / 2f)
+                 else if (floating) {
+                     // thin Material You outline so the pill stands out on any background
+                     val r = ctx.dp(Prefs.tbDp(ctx)) / 2f
+                     val ring = android.graphics.drawable.GradientDrawable().apply {
+                         shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+                         cornerRadius = r
+                         setColor(0)
+                         setStroke(ctx.dp(1).coerceAtLeast(1), (Colors.accent(ctx) and 0x00FFFFFF) or 0xE6000000.toInt())
+                     }
+                     android.graphics.drawable.LayerDrawable(arrayOf(Colors.panel(ctx, barCol, r), ring))
+                 }
                  else android.graphics.drawable.ColorDrawable(barCol)
         host.background = bg
         // Keep the scroll position across rebuilds (the strip used to jump back to the start).
