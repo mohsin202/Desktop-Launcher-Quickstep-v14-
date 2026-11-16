@@ -112,7 +112,15 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
     /** Floating pill: always (gesture, auto-hide off / three buttons with the pill option), or while swiped up. */
     private fun floatingNow() = if (gest()) (!autoHide() || expanded) else Prefs.bool(this, Prefs.K_PILL, false)
     /** Height (width on a side edge) of the bar window now. */
-    private fun winThick() = if (collapsedNow()) stripPx() else uctx.dp(Prefs.tbDp(this))
+    /**
+     * Height of the bar window. At the bottom the window is always as wide as the screen and its frame is exactly the space the
+     * bar reserves; the pill is drawn inside it (12 dp from the bottom, and 12 dp free above it when it is permanent).
+     */
+    private fun winThick(side: Int = barSide): Int = when {
+        collapsedNow() -> stripPx()
+        side == 0 && floatingNow() -> uctx.dp(Prefs.tbDp(this)) + uctx.dp(12) * (if (autoHide()) 1 else 2)
+        else -> uctx.dp(Prefs.tbDp(this))
+    }
     /** Space reserved for apps: in gesture mode only the strip, the shown taskbar floats over the app. */
     private fun insetThick() = if (autoHide()) stripPx()
         else if (floatingNow()) uctx.dp(Prefs.tbDp(this)) + 2 * uctx.dp(12)   // equal gap above and below the pill
@@ -221,15 +229,15 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
 
     /** Size and position of the bar window: whole edge, or (gesture mode, shown) a floating pill in the middle of the edge. */
     private fun place(lp: WindowManager.LayoutParams, b: TaskbarView, side: Int) {
-        val t = winThick()
+        val t = winThick(side)
         val len = fitLen(b, side)
         b.setLength(len)
         val fl = floatingNow()
         val m = uctx.dp(12)
         if (side == 0) {
-            lp.width = if (fl) len else MATCH; lp.height = t
-            lp.gravity = if (fl) Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL else Gravity.BOTTOM
-            lp.x = 0; lp.y = if (fl) m else 0
+            lp.width = MATCH; lp.height = t
+            lp.gravity = Gravity.BOTTOM
+            lp.x = 0; lp.y = 0
         } else {
             val h = if (side == 2) Gravity.END else Gravity.START
             lp.width = t; lp.height = if (fl) len else len
@@ -256,7 +264,8 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
         try {
             val lp = b.layoutParams as WindowManager.LayoutParams
             val want = fitLen(b, barSide)
-            if (want == (if (barSide == 0) lp.width else lp.height)) return
+            if (want == b.curLen()) return
+            if (barSide == 0) { b.setLength(want); return }   // the window is full width: only the pill inside changes
             place(lp, b, barSide)
             wm.updateViewLayout(b, lp)
         } catch (_: Throwable) {}
@@ -590,7 +599,7 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
         var v: TaskbarView? = null
         try {
             val side = navSide()
-            val thick = winThick()
+            val thick = winThick(side)
             val top = if (side != 0) statusTop() else 0
             val len = screenBounds().height()
             v = TaskbarView(uctx, this, true, false, side, len, top, collapsedNow(), thick)
@@ -712,10 +721,10 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
         if (drawer != null) return
         if (autoHide() && !expanded && bar != null) setExpanded(true)
         val gap = if (floatingNow()) uctx.dp(12) else 0
-        val barH = if (bar != null && barSide == 0) winThick() + gap else 0
+        val barH = if (bar != null && barSide == 0) winThick() else 0
         val barW = if (bar != null && barSide != 0) winThick() + gap else 0
         val screenH = screenBounds().height()
-        val d = DrawerView(uctx, uctx.dp(if (floatingNow()) 12 else 8), false, if (barW > 0) barSide else 0, floatingNow() && barW == 0) { closeDrawer() }
+        val d = DrawerView(uctx, uctx.dp(if (floatingNow() && barSide == 0 && !autoHide()) 0 else if (floatingNow()) 12 else 8), false, if (barW > 0) barSide else 0, floatingNow() && barW == 0) { closeDrawer() }
         d.dragHook = { on ->
             // while an icon is carried, the drawer window lets touches / drops through to the desktop
             try {
@@ -823,7 +832,9 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
     var onInsets: (() -> Unit)? = null
 
     private val body: FrameLayout? = if (side != 0) FrameLayout(ctx) else null
-    private val host: FrameLayout get() = body ?: this
+    /** Bottom bar: holds the icons; it is the whole window, or (pill) a smaller box inside the full-size window. */
+    private val pillBox = FrameLayout(ctx)
+    private val host: FrameLayout get() = body ?: pillBox
     private val center = LinearLayout(ctx)
     private val right = LinearLayout(ctx)
     private val appsRow = LinearLayout(ctx)
@@ -839,7 +850,8 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
         right.layoutDirection = View.LAYOUT_DIRECTION_LTR
         appsRow.layoutDirection = View.LAYOUT_DIRECTION_LTR
         scroll.layoutDirection = View.LAYOUT_DIRECTION_LTR
-        elevation = if (pill) ctx.dp(6).toFloat() else 0f
+        pillBox.elevation = if (pill) ctx.dp(6).toFloat() else 0f
+        if (body == null) addView(pillBox, LayoutParams(MATCH, MATCH))
         center.orientation = LinearLayout.HORIZONTAL
         center.gravity = Gravity.CENTER_VERTICAL
         right.orientation = LinearLayout.HORIZONTAL
@@ -866,6 +878,7 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
             body.setPadding(if (side == 1) inset else 0, 0, if (side == 2) inset else 0, 0)
             addView(body, LayoutParams(lenPx, thick))
         }
+        layoutPill()
         refresh()
     }
 
@@ -876,6 +889,7 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
     fun setMode(c: Boolean, t: Int) {
         val changed = c != collapsed || t != thickPx
         collapsed = c; thickPx = t
+        layoutPill()
         if (!c) { handleV.animate().cancel(); handleV.scaleX = 1f; handleV.scaleY = 1f }
         body?.let {
             val l = it.layoutParams; l.height = t; it.layoutParams = l
@@ -917,10 +931,27 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
         return super.dispatchHoverEvent(ev)
     }
 
+    fun curLen() = lenPx
+
+    /** Bottom bar: the pill is a box (icons wide, 48 dp high) at the bottom of the full-size window; otherwise it fills the window. */
+    private fun layoutPill() {
+        if (body != null) return
+        val lp = pillBox.layoutParams as? LayoutParams ?: return
+        if (floatingShape()) {
+            lp.width = lenPx; lp.height = ctx.dp(Prefs.tbDp(ctx))
+            lp.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            lp.bottomMargin = ctx.dp(12)
+        } else {
+            lp.width = MATCH; lp.height = MATCH; lp.gravity = Gravity.NO_GRAVITY; lp.bottomMargin = 0
+        }
+        pillBox.layoutParams = lp
+    }
+
     /** Length along the screen edge (the pill is as long as its icons). */
     fun setLength(l: Int) {
         if (l == lenPx) return
         lenPx = l
+        layoutPill()
         body?.let {
             val lp = it.layoutParams; lp.width = l; it.layoutParams = lp
             if (side == 2) it.translationY = l.toFloat()
@@ -940,6 +971,11 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
     override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
         if (showNav && NavMode.gesture(ctx)) {
             if (ev.actionMasked == android.view.MotionEvent.ACTION_OUTSIDE) { svc.barOutside(); return true }
+            // the window is full width: a touch on its empty part (beside the pill) counts as "outside"
+            if (!collapsed && body == null && ev.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
+                val x = ev.x.toInt(); val y = ev.y.toInt()
+                if (x < pillBox.left || x > pillBox.right || y < pillBox.top || y > pillBox.bottom) { svc.barOutside(); return true }
+            }
             svc.barTouched()
         }
         return super.dispatchTouchEvent(ev)
@@ -1043,7 +1079,7 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
     fun refresh() {
         if (collapsed) {
             // only the gesture handle
-            if (body != null) body.background = null else background = null
+            host.background = null
             center.removeAllViews(); right.removeAllViews(); appsRow.removeAllViews()
             center.visibility = View.GONE; right.visibility = View.GONE
             handleV.background = Colors.rounded(if (handleDark) 0xDDFFFFFF.toInt() else 0xCC4A4A4A.toInt(), ctx.dp(2).toFloat())
@@ -1055,9 +1091,9 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
         val barCol = Colors.taskbar(ctx)
         val floating = floatingShape()
         val bg = if (pill) Colors.panel(ctx, barCol, ctx.dp(28).toFloat())
-                 else if (floating) Colors.panel(ctx, barCol, thickPx / 2f)
+                 else if (floating) Colors.panel(ctx, barCol, ctx.dp(Prefs.tbDp(ctx)) / 2f)
                  else android.graphics.drawable.ColorDrawable(barCol)
-        if (body != null) body.background = bg else background = bg
+        host.background = bg
         // Keep the scroll position across rebuilds (the strip used to jump back to the start).
         val keepX = scroll.scrollX
         center.removeAllViews()
