@@ -658,6 +658,8 @@ class SettingsActivity : Activity() {
         note(UiText.text(this, "Off: the taskbar pill is always shown and apps stay above it."))
         sw(UiText.text(this, "Pill-shaped taskbar (three-button navigation)"), Prefs.K_PILL, false)
         note(UiText.text(this, "The bar becomes a floating pill; apps do not go behind it."))
+        sw(UiText.text(this, "Transparent taskbar (takes the app's colour)"), Prefs.K_BAR_CLEAR, true)
+        note(UiText.text(this, "The flat taskbar has no colour of its own: the app's background shows in it. Off: Material You colour."))
         permSw(UiText.text(this, "Taskbar service (Accessibility)"), TaskbarService.instance != null) { go(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
     }
 

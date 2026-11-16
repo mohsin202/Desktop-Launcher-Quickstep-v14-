@@ -1037,6 +1037,8 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
                      }
                      android.graphics.drawable.LayerDrawable(arrayOf(Colors.panel(ctx, barCol, r), ring))
                  }
+                 // flat bar: no colour of its own (the apps paint the band, now that the system scrim is off), or the Material You colour
+                 else if (showNav && Prefs.bool(ctx, Prefs.K_BAR_CLEAR, true)) android.graphics.drawable.ColorDrawable(0)
                  else android.graphics.drawable.ColorDrawable(barCol)
         host.background = bg
         // Keep the scroll position across rebuilds (the strip used to jump back to the start).
