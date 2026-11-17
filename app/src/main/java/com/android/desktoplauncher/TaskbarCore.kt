@@ -151,12 +151,8 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
     override fun appLaunched() { if (autoHide()) { if (drawer != null) closeDrawer(); setExpanded(false) } }
 
     // ---- What is behind the bar decides the colour of the gesture handle and of the bar's buttons ----
-    private var sampleQueued = false
-    private var sampleBusy = false
-    private var lastSample = 0L
     private var inkDark = true
     private var lastInk: Int? = null
-    private val sampleRun = Runnable { sampleQueued = false; sampleHandle() }
     private fun themeDark() = (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
         android.content.res.Configuration.UI_MODE_NIGHT_YES
 
@@ -167,80 +163,24 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
 
     private fun scheduleSample() {
         if (!inkWanted() && lastInk != null) { lastInk = null; bar?.setInk(null) }
-        if (sampleWanted() && applySysUiShade()) return   // from SystemUI: immediate
-        if (sampleQueued || !sampleWanted()) return
-        sampleQueued = true
-        handler.postDelayed(sampleRun, (lastSample + 1200 - SystemClock.uptimeMillis()).coerceAtLeast(200))
+        if (sampleWanted()) applyShade()
     }
 
     /**
-     * Light or dark buttons straight from SystemUI: the same light/dark value it gives its own navigation bar (it follows the
-     * app on top at once, no screenshot, no delay). Returns false when SystemUI has not sent it (then the screenshot is used).
+     * Dark icons on a light bar, light icons on a dark one, taken from SystemUI at once (no screenshot, no delay): it sends the
+     * light/dark value it would give its own navigation bar whenever the app on top changes it. SystemUI only sends it when the
+     * value changes, so until it has sent one the value is its starting one: light icons.
      */
-    private fun applySysUiShade(): Boolean {
-        if (!SysUi.darkSeen) return false
-        val b = bar ?: return true
-        val lightBg = SysUi.darkIntensity > 0.5f
-        if (collapsedNow()) b.setHandleDark(!lightBg) else applyInk(if (lightBg) 1f else 0f)
-        return true
-    }
-    private val shadeListener: () -> Unit = { if (sampleWanted()) applySysUiShade() }
-
-    /** SystemUI's value when it has sent one, otherwise the system theme. */
-    private fun sampleHandle() {
-        if (applySysUiShade()) return
-        if (collapsedNow()) bar?.setHandleDark(themeDark()) else applyInk(if (themeDark()) 0f else 1f)
-    }
-
-    /** Light or dark buttons for the average brightness behind the bar (a pill's own scrim is mixed in). */
-    private fun applyInk(lum: Float?) {
+    private fun applyShade() {
         val b = bar ?: return
-        if (!inkWanted()) { lastInk = null; b.setInk(null); return }
-        if (lum == null) return
-        val eff = if (floatingNow()) { val a = scrimFrac(); a * (if (Colors.night(this)) 0f else 1f) + (1f - a) * lum } else lum
-        inkDark = if (inkDark) eff < 0.55f else eff < 0.45f   // a little hysteresis: no flicker around the middle
-        val ink = if (inkDark) 0xFFF4F4F4.toInt() else 0xFF1B1B1F.toInt()
-        lastInk = ink
-        b.setInk(ink)
+        val dark = SysUi.darkIntensity <= 0.5f   // 1 = dark icons (light background); 0 = light icons
+        if (collapsedNow()) { b.setHandleDark(dark); return }
+        if (!inkWanted()) return
+        inkDark = dark
+        val ink = if (dark) 0xFFF4F4F4.toInt() else 0xFF1B1B1F.toInt()
+        if (ink != lastInk) { lastInk = ink; b.setInk(ink) }
     }
-
-    /** Next to the gesture handle: left and right of it in the strip. */
-    private fun handleRects(w: Int, h: Int): List<android.graphics.Rect> {
-        val s = stripPx().coerceAtMost(minOf(w, h) / 4)
-        return when (barSide) {
-            0 -> listOf(android.graphics.Rect(w / 20, h - s, w * 7 / 20, h), android.graphics.Rect(w * 13 / 20, h - s, w * 19 / 20, h))
-            1 -> listOf(android.graphics.Rect(0, h / 20, s, h * 7 / 20), android.graphics.Rect(0, h * 13 / 20, s, h * 19 / 20))
-            else -> listOf(android.graphics.Rect(w - s, h / 20, w, h * 7 / 20), android.graphics.Rect(w - s, h * 13 / 20, w, h * 19 / 20))
-        }
-    }
-
-    /** Where no button is: the free gap under a pill, or the top rows of a flat bar. */
-    private fun bandRects(w: Int, h: Int): List<android.graphics.Rect> {
-        val d = uctx.dp(1).coerceAtLeast(1)
-        return if (floatingNow()) listOf(android.graphics.Rect(w / 20, h - 9 * d, w * 19 / 20, h - 3 * d))
-        else listOf(android.graphics.Rect(w / 20, h - winThick(), w * 19 / 20, h - winThick() + 4 * d))
-    }
-
-    /** Average brightness (0 dark .. 1 light) of the given screen areas. */
-    private fun lumOf(src: Bitmap, rects: List<android.graphics.Rect>): Float? {
-        var sum = 0.0; var n = 0
-        for (r0 in rects) {
-            val r = android.graphics.Rect(r0)
-            if (!r.intersect(0, 0, src.width, src.height) || r.width() <= 0 || r.height() <= 0) continue
-            val part = Bitmap.createBitmap(src, r.left, r.top, r.width(), r.height())
-            val soft = part.copy(Bitmap.Config.ARGB_8888, false) ?: continue
-            val px = IntArray(soft.width * soft.height)
-            soft.getPixels(px, 0, soft.width, 0, 0, soft.width, soft.height)
-            var i = 0
-            while (i < px.size) {
-                val c = px[i]
-                sum += (0.299 * ((c shr 16) and 255) + 0.587 * ((c shr 8) and 255) + 0.114 * (c and 255)) / 255.0
-                n++; i += 5
-            }
-            soft.recycle(); if (part !== src) part.recycle()
-        }
-        return if (n == 0) null else (sum / n).toFloat()
-    }
+    private val shadeListener: () -> Unit = { if (sampleWanted()) applyShade() }
 
     private fun fullLen(side: Int) = if (side == 0) screenBounds().width() else screenBounds().height()
 

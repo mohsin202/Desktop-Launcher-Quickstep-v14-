@@ -451,6 +451,7 @@ object Launch {
         line("System app (system partition)", SysTasks.isSystem(c))
         line("REAL_GET_TASKS", SysTasks.hasRealTasks(c))
         line("Task list from the system", SysTasks.tasks(c)?.let { it.size.toString() + " tasks: " + it.joinToString(", ") { t -> t.pkg + "#" + t.id + "/m" + t.mode } } ?: "not available (accessibility fallback in use)")
+        line("Button colour from SystemUI", if (SysUi.darkSeen) "received, value " + SysUi.darkIntensity else "nothing received yet (light icons)")
         line("Taskbar window", TaskbarCore.instance?.let { if (it.navMode) "navigation bar (space reserved)" else "overlay (fallback)" } ?: "not running")
         line("SystemUI connected (Quickstep)", SysUi.connected)
         line("System all-apps action (Windows key)", TouchInteractionService.allAppsStatus)
