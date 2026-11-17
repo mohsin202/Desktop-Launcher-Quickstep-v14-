@@ -450,8 +450,11 @@ object Launch {
         line("WRITE_SECURE_SETTINGS", hasSecure(c))
         line("System app (system partition)", SysTasks.isSystem(c))
         line("REAL_GET_TASKS", SysTasks.hasRealTasks(c))
+        for (perm in listOf("MONITOR_INPUT", "INJECT_EVENTS", "ACCESS_SURFACE_FLINGER", "READ_FRAME_BUFFER", "MANAGE_ACTIVITY_TASKS", "START_TASKS_FROM_RECENTS",
+            "CONTROL_REMOTE_APP_TRANSITION_ANIMATIONS", "STATUS_BAR_SERVICE", "INTERNAL_SYSTEM_WINDOW", "STOP_APP_SWITCHES", "REMOVE_TASKS"))
+            line("Permission $perm", c.checkSelfPermission("android.permission.$perm") == android.content.pm.PackageManager.PERMISSION_GRANTED)
         line("Task list from the system", SysTasks.tasks(c)?.let { it.size.toString() + " tasks: " + it.joinToString(", ") { t -> t.pkg + "#" + t.id + "/m" + t.mode } } ?: "not available (accessibility fallback in use)")
-        line("Button colour", if (SysUi.darkSeen) "from SystemUI, value " + SysUi.darkIntensity else "from the app on top / wallpaper (SystemUI sends nothing in gesture navigation)")
+        line("Button colour", if (SysUi.darkSeen) "from SystemUI, value " + SysUi.darkIntensity else if ((TaskbarCore.instance?.sampleInfo() ?: "").contains("works")) "from SurfaceFlinger brightness sampling" else "guessed from the app on top / wallpaper")
         line("Brightness sampling", TaskbarCore.instance?.sampleInfo() ?: "taskbar not running")
         line("Taskbar window", TaskbarCore.instance?.let { if (it.navMode) "navigation bar (space reserved)" else "overlay (fallback)" } ?: "not running")
         line("SystemUI connected (Quickstep)", SysUi.connected)

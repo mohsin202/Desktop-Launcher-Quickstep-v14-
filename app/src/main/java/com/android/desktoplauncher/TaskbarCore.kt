@@ -760,6 +760,7 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
     private var inkColor: Int? = null
     /** Colour of the buttons: the theme's, or (transparent bar) light / dark by what is behind the bar. */
     fun ink(): Int = inkColor ?: Colors.text(ctx)
+    fun inkOrNull(): Int? = inkColor
     fun setInk(c: Int?) { if (c == inkColor) return; inkColor = c; if (!collapsed) refresh() }
     private var gMouse = false
     private var hoverPending = false
@@ -1174,7 +1175,7 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
         f.addView(ic, FrameLayout.LayoutParams(s, s, Gravity.CENTER))
         if (running) {
             val line = View(ctx)
-            line.background = Colors.rounded(Colors.accent(ctx), ctx.dp(2).toFloat())
+            line.background = Colors.rounded(inkOrNull() ?: Colors.accent(ctx), ctx.dp(2).toFloat())   // same light/dark as the icons
             f.addView(line, FrameLayout.LayoutParams(ctx.dp(if (active) 18 else 6), ctx.dp(3), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
                 .also { it.bottomMargin = ctx.dp(3) })
         }
@@ -1208,7 +1209,7 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
 class StartButton(c: Context) : View(c) {
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
     override fun onDraw(canvas: Canvas) {
-        p.color = Colors.accent(context)
+        p.color = barInk() ?: Colors.accent(context)   // follows the light/dark buttons; Material You colour only when the bar is not transparent
         val s = minOf(width, height) * 0.38f
         val step = s / 2f
         val r = s * 0.11f
@@ -1231,6 +1232,13 @@ class ImeButton(c: Context) : View(c) {
         canvas.drawOval(RectF(cx - r * 0.45f, cy - r, cx + r * 0.45f, cy + r), p)
         canvas.drawLine(cx - r, cy, cx + r, cy, p)
     }
+}
+
+/** The light/dark button colour the bar has chosen, or null when it is not following the background. */
+fun View.barInk(): Int? {
+    var p: android.view.ViewParent? = parent
+    while (p != null) { if (p is TaskbarView) return p.inkOrNull(); p = p.parent }
+    return null
 }
 
 /** kind: 0 back, 1 home, 2 recents */
