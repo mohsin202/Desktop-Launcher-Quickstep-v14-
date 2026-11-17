@@ -48,5 +48,7 @@ android {
 }
 
 dependencies {
+    // hidden framework classes, compile-time stubs only (the real ones are in the system)
+    compileOnly(files("libs/hidden-stubs.jar"))
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 }
