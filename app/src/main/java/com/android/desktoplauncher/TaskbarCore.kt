@@ -161,19 +161,97 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
     private fun sampleWanted() = barShown && (collapsedNow() || inkWanted())
     private fun scrimFrac() = Prefs.scrim(this) / 100f
 
+    private var shadeTick = false
+
+    // The real thing, as in Trebuchet: SurfaceFlinger reports the brightness behind the status bar. Needs ACCESS_SURFACE_FLINGER
+    // (system-signed apps only); when we are not allowed no sample ever arrives and the guesses below are used.
+    @Volatile private var sampledLuma: Float? = null
+    @Volatile private var sampleCount = 0
+    private var sampler: android.view.CompositionSamplingListener? = null
+    private var samplerArea: android.graphics.Rect? = null
+    private var samplerLight = false
+
+    private fun startSampler() {
+        val area = android.graphics.Rect(0, 0, screenBounds().width(), maxOf(statusTop(), uctx.dp(24)))
+        if (sampler != null && samplerArea == area) return
+        stopSampler()
+        try {
+            val s = object : android.view.CompositionSamplingListener({ r -> handler.post(r) }) {
+                override fun onSampleCollected(medianLuma: Float) {
+                    sampleCount++
+                    sampledLuma = medianLuma
+                    samplerLight = if (samplerLight) medianLuma > 0.45f else medianLuma > 0.55f
+                    applyShade()
+                }
+            }
+            android.view.CompositionSamplingListener.register(s, android.view.Display.DEFAULT_DISPLAY, null, area)
+            sampler = s; samplerArea = area
+        } catch (t: Throwable) { Log.w("DesktopTaskbar", "luma sampling not possible: $t"); sampler = null }
+    }
+    private fun stopSampler() {
+        val s = sampler ?: return
+        try { android.view.CompositionSamplingListener.unregister(s); s.destroy() } catch (_: Throwable) {}
+        sampler = null; samplerArea = null
+    }
+    fun sampleInfo() = if (sampleCount > 0) "SurfaceFlinger luma sampling works ($sampleCount samples, last " + sampledLuma + ")"
+        else "SurfaceFlinger luma sampling: no samples (permission missing?)"
+
     private fun scheduleSample() {
         if (!inkWanted() && lastInk != null) { lastInk = null; bar?.setInk(null) }
-        if (sampleWanted()) applyShade()
+        if (!sampleWanted()) { stopSampler(); return }
+        startSampler()
+        applyShade()
+        if (!shadeTick) { shadeTick = true; handler.postDelayed(shadeRun, 500) }
+    }
+
+    /** Looks at the app on top twice a second (a cheap task query, no pixels) and re-colours the icons when it changed. */
+    private val shadeRun = object : Runnable {
+        override fun run() {
+            if (!sampleWanted()) { shadeTick = false; return }
+            applyShade()
+            handler.postDelayed(this, 500)
+        }
     }
 
     /**
-     * Dark icons on a light bar, light icons on a dark one, taken from SystemUI at once (no screenshot, no delay): it sends the
-     * light/dark value it would give its own navigation bar whenever the app on top changes it. SystemUI only sends it when the
-     * value changes, so until it has sent one the value is its starting one: light icons.
+     * Whether the status bar (and so the bar behind our icons) is light: then the icons are dark, otherwise white.
+     * 1. When SystemUI sends its navigation-bar value (three-button navigation), that.
+     * 2. Otherwise the app on top: the light-status-bar flag of its theme, else the brightness of its status-bar / window colour.
+     * 3. On the home screen: whether the wallpaper allows dark text.
+     * The stock launcher can ask the display compositor for the real brightness, but that needs a system-signed app.
      */
+    private fun lightBehind(): Boolean {
+        if (sampleCount > 0 && sampledLuma != null) return samplerLight
+        if (SysUi.darkSeen) return SysUi.darkIntensity > 0.5f
+        try {
+            @Suppress("DEPRECATION")
+            val ti = getSystemService(ActivityManager::class.java).getRunningTasks(3).firstOrNull { (it.topActivity?.packageName ?: "") != "com.android.systemui" }
+            val pkg = ti?.topActivity?.packageName
+            if (ti != null && pkg != null && pkg != packageName) {
+                val td = ti.taskDescription
+                if (td != null) {
+                    val ap = try { td.javaClass.getMethod("getSystemBarsAppearance").invoke(td) as Int } catch (_: Throwable) { -1 }
+                    if (ap >= 0 && (ap and 8) != 0) return true   // APPEARANCE_LIGHT_STATUS_BARS
+                    var c = try { td.statusBarColor } catch (_: Throwable) { 0 }
+                    if (android.graphics.Color.alpha(c) < 0xE0) c = try { td.backgroundColor } catch (_: Throwable) { 0 }
+                    if (c == 0) c = try { td.primaryColor } catch (_: Throwable) { 0 }
+                    if (c != 0) return androidx_lum(c) > 0.7f
+                }
+                return false
+            }
+        } catch (_: Throwable) {}
+        // our own screens / the home screen: the wallpaper
+        return try {
+            val wc = android.app.WallpaperManager.getInstance(this).getWallpaperColors(android.app.WallpaperManager.FLAG_SYSTEM)
+            wc != null && (wc.colorHints and android.app.WallpaperColors.HINT_SUPPORTS_DARK_TEXT) != 0
+        } catch (_: Throwable) { !themeDark() }
+    }
+    private fun androidx_lum(c: Int): Float =
+        ((0.299 * android.graphics.Color.red(c) + 0.587 * android.graphics.Color.green(c) + 0.114 * android.graphics.Color.blue(c)) / 255.0).toFloat()
+
     private fun applyShade() {
         val b = bar ?: return
-        val dark = SysUi.darkIntensity <= 0.5f   // 1 = dark icons (light background); 0 = light icons
+        val dark = !lightBehind()   // dark behind: light icons
         if (collapsedNow()) { b.setHandleDark(dark); return }
         if (!inkWanted()) return
         inkDark = dark
@@ -267,6 +345,7 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
 
     fun stop() {
         SysUi.listeners.remove(shadeListener)
+        stopSampler()
         try { baseContext.unregisterComponentCallbacks(configCb) } catch (_: Throwable) {}
         handler.removeCallbacks(pruneTick)
         try { contentResolver.unregisterContentObserver(navObserver) } catch (_: Throwable) {}
