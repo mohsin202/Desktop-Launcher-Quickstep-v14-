@@ -237,13 +237,6 @@ class RecentsActivity : Activity() {
         main.postDelayed({ finishNow() }, 600)   // never stay if the animation is cut short
     }
 
-    /** Opens the app, then asks the system to split the screen with it (needs the accessibility helper). */
-    private fun split(t: RTask) {
-        Recents.open(this, t)
-        leave()
-        main.postDelayed({ com.android.desktoplauncher.TaskbarCore.instance?.global(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN) }, 450)
-    }
-
     private fun appInfo(t: RTask) {
         try {
             startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", t.pkg, null)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -254,8 +247,7 @@ class RecentsActivity : Activity() {
     /** Right-click / long-press on the icon: App info directly, or a small menu when freeform windows are on. */
     private fun showMenu(anchor: View, t: RTask) {
         val freeform = Prefs.bool(this, Prefs.K_FREEFORM, false)
-        val canSplit = com.android.desktoplauncher.TaskbarService.instance != null
-        if (!freeform && !canSplit) { appInfo(t); return }
+        if (!freeform) { appInfo(t); return }
         menu?.dismiss()
         val box = LinearLayout(this).also {
             it.orientation = LinearLayout.VERTICAL
@@ -271,7 +263,6 @@ class RecentsActivity : Activity() {
             }, LinearLayout.LayoutParams(-2, -2))
         }
         item(UiText.text(this, "App info")) { appInfo(t) }
-        if (canSplit) item(UiText.text(this, "Split screen")) { split(t) }
         if (freeform) item(UiText.text(this, "Freeform window")) {
             Thread { SysTasks.setMode(t.id, 5) }.start()
             main.postDelayed({ open(t) }, 250)
@@ -332,6 +323,7 @@ class RecentsActivity : Activity() {
             KeyEvent.KEYCODE_DPAD_RIGHT -> { moveSel(1, 0); return true }
             KeyEvent.KEYCODE_DPAD_UP -> { moveSel(0, -1); return true }
             KeyEvent.KEYCODE_DPAD_DOWN -> { moveSel(0, 1); return true }
+            KeyEvent.KEYCODE_TAB -> { quickMove(if (e.isShiftPressed) -1 else 1); return true }   // Alt+Tab: Alt is held by the system, Tab cycles
             KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> { (selCard ?: cards.firstOrNull())?.let { open(it.task) }; return true }
         }
         return super.onKeyDown(code, e)
