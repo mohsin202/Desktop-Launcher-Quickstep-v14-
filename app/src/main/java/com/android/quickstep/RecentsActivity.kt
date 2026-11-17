@@ -175,7 +175,7 @@ class RecentsActivity : Activity() {
         val steps = ArrayList(pendingSteps); pendingSteps.clear()
         if (steps.isNotEmpty()) { selIdx = 0; for (d in steps) quickMove(d) }
         if (commitWanted) { commitWanted = false; main.post { quickOpen() } }
-        grid.afterLayout = { grid.post { scroll.scrollTo(if (rtl()) (grid.width - vw).coerceAtLeast(0) else 0, 0) } }
+        grid.afterLayout = { grid.post { scroll.scrollTo(if (rtl()) (grid.width - vw).coerceAtLeast(0) else 0, 0); enter() } }
     }
 
     /**
@@ -222,7 +222,26 @@ class RecentsActivity : Activity() {
 
     private fun open(t: RTask) {
         Recents.open(this, t)
+        val c = cards.firstOrNull { it.task === t }
+        if (c == null || c.width == 0 || leaving) { leave(); return }
+        // like the stock launcher: the card grows to fill the screen while the rest fades out
+        leaving = true; menu?.dismiss()
+        for (o in cards) if (o !== c) o.animate().alpha(0f).setDuration(120).start()
+        clearAll?.animate()?.alpha(0f)?.setDuration(120)?.start()
+        c.pivotX = c.width / 2f; c.pivotY = c.headerH + c.ch / 2f
+        c.animate().scaleX(vw.toFloat() / c.cw).scaleY(vh.toFloat() / c.ch)
+            .translationX(vw / 2f - (c.left - scroll.scrollX + c.width / 2f))
+            .translationY(vh / 2f - (c.top + c.headerH + c.ch / 2f))
+            .setDuration(230).setInterpolator(android.view.animation.DecelerateInterpolator(1.4f))
+            .withEndAction { finishNow() }.start()
+        main.postDelayed({ finishNow() }, 600)   // never stay if the animation is cut short
+    }
+
+    /** Opens the app, then asks the system to split the screen with it (needs the accessibility helper). */
+    private fun split(t: RTask) {
+        Recents.open(this, t)
         leave()
+        main.postDelayed({ com.android.desktoplauncher.TaskbarCore.instance?.global(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN) }, 450)
     }
 
     private fun appInfo(t: RTask) {
@@ -234,7 +253,9 @@ class RecentsActivity : Activity() {
 
     /** Right-click / long-press on the icon: App info directly, or a small menu when freeform windows are on. */
     private fun showMenu(anchor: View, t: RTask) {
-        if (!Prefs.bool(this, Prefs.K_FREEFORM, false)) { appInfo(t); return }
+        val freeform = Prefs.bool(this, Prefs.K_FREEFORM, false)
+        val canSplit = com.android.desktoplauncher.TaskbarService.instance != null
+        if (!freeform && !canSplit) { appInfo(t); return }
         menu?.dismiss()
         val box = LinearLayout(this).also {
             it.orientation = LinearLayout.VERTICAL
@@ -250,7 +271,8 @@ class RecentsActivity : Activity() {
             }, LinearLayout.LayoutParams(-2, -2))
         }
         item(UiText.text(this, "App info")) { appInfo(t) }
-        item(UiText.text(this, "Freeform window")) {
+        if (canSplit) item(UiText.text(this, "Split screen")) { split(t) }
+        if (freeform) item(UiText.text(this, "Freeform window")) {
             Thread { SysTasks.setMode(t.id, 5) }.start()
             main.postDelayed({ open(t) }, 250)
         }
@@ -279,8 +301,28 @@ class RecentsActivity : Activity() {
         if (leaving) return
         leaving = true
         menu?.dismiss()
+        if (!built || cards.isEmpty()) { finishNow(); return }
+        scroll.animate().alpha(0f).scaleX(0.96f).scaleY(0.96f).setDuration(130).withEndAction { finishNow() }.start()
+        main.postDelayed({ finishNow() }, 500)
+    }
+    private fun finishNow() {
+        if (isFinishing) return
         finish()
         overridePendingTransition(0, 0)
+    }
+
+    /** The cards come in: the focus card grows from a little smaller, the grid slides in from the side one after another. */
+    private fun enter() {
+        val dec = android.view.animation.DecelerateInterpolator(1.6f)
+        val dir = if (rtl()) -1 else 1
+        cards.forEachIndexed { i, c ->
+            c.alpha = 0f
+            if (i == 0) { c.scaleX = 0.92f; c.scaleY = 0.92f }
+            else c.translationX = dir * dp(90).toFloat()
+            c.animate().alpha(1f).scaleX(1f).scaleY(1f).translationX(0f)
+                .setStartDelay(if (i == 0) 0L else 40L + 30L * Math.min(i, 8)).setDuration(260).setInterpolator(dec).start()
+        }
+        clearAll?.let { it.alpha = 0f; it.animate().alpha(1f).setStartDelay(260).setDuration(200).start() }
     }
 
     override fun onKeyDown(code: Int, e: KeyEvent): Boolean {
@@ -334,14 +376,14 @@ class RecentsActivity : Activity() {
     // Home / another app on top: the screen is not needed any more
     override fun onStop() {
         super.onStop()
-        com.android.desktoplauncher.TaskbarService.instance?.recentsVisible(false)
+        com.android.desktoplauncher.TaskbarCore.instance?.recentsVisible(false)
         if (!leaving) { leaving = true; finish() }
     }
     // the taskbar stays visible in Recents (gesture navigation shows it there, like Trebuchet)
-    override fun onResume() { super.onResume(); com.android.desktoplauncher.TaskbarService.instance?.recentsVisible(true) }
+    override fun onResume() { super.onResume(); com.android.desktoplauncher.TaskbarCore.instance?.recentsVisible(true) }
     override fun onDestroy() {
         if (current === this) current = null
-        com.android.desktoplauncher.TaskbarService.instance?.recentsVisible(false)
+        com.android.desktoplauncher.TaskbarCore.instance?.recentsVisible(false)
         super.onDestroy()
     }
 }
