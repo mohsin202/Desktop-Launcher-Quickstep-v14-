@@ -595,7 +595,6 @@ class SettingsActivity : Activity() {
         perm("Display over other apps", Settings.canDrawOverlays(this)) { go(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, pkgUri)) }
         perm("Modify system settings", Settings.System.canWrite(this)) { go(Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, pkgUri)) }
         perm("All files access", Compat.hasAllFiles(this)) { go(Intent(if (android.os.Build.VERSION.SDK_INT >= 30) Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION else Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkgUri)) }
-        perm("Accessibility (optional: Alt+Tab hold, bar colour, split/lock)", TaskbarService.instance != null) { go(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
         perm("Notification access", notifOn) { go(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
         card("More")
         val c = checkSelfPermission(Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
@@ -653,7 +652,6 @@ class SettingsActivity : Activity() {
         })
         addSetting(sb)
         note(UiText.text(this, "The taskbar is the navigation bar: apps stay above it. Default height 48 dp."))
-        sw(UiText.text(this, "Start the taskbar service automatically"), Prefs.K_AUTO_A11Y, true)
         sw(UiText.text(this, "Auto-hide taskbar (gesture navigation)"), Prefs.K_AUTOHIDE, true)
         note(UiText.text(this, "Off: the taskbar pill is always shown and apps stay above it."))
         sw(UiText.text(this, "Pill-shaped taskbar (three-button navigation)"), Prefs.K_PILL, false)
@@ -673,7 +671,6 @@ class SettingsActivity : Activity() {
         })
         addSetting(ss)
         note(UiText.text(this, "On: the Material You colour goes; the bar (or the pill) gets only a light scrim, and its buttons turn light or dark by the background. Off: Material You colour."))
-        permSw(UiText.text(this, "Accessibility helper (optional)"), TaskbarService.instance != null) { go(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
     }
 
     private fun secDesktop() {

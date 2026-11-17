@@ -102,8 +102,9 @@ class TouchInteractionService : Service() {
         // Not used yet (they belong to Overview / gestures / assistant; the next phases). Kept so SystemUI gets an answer.
         // The hardware Recents key, Alt+Tab and the system's own "toggle recents" all arrive here
         override fun onOverviewToggle() { mainH.post { com.android.quickstep.RecentsActivity.toggle(applicationContext) } }
-        override fun onOverviewShown(triggeredFromAltTab: Boolean) { mainH.post { com.android.quickstep.RecentsActivity.show(applicationContext) } }
-        override fun onOverviewHidden(triggeredFromAltTab: Boolean, triggeredFromHomeKey: Boolean) { mainH.post { com.android.quickstep.RecentsActivity.hide() } }
+        override fun onOverviewShown(triggeredFromAltTab: Boolean) { mainH.post { if (triggeredFromAltTab) com.android.quickstep.RecentsActivity.quickStep(applicationContext, 1) else com.android.quickstep.RecentsActivity.show(applicationContext) } }
+        // Alt released after Alt+Tab: open the selected card
+        override fun onOverviewHidden(triggeredFromAltTab: Boolean, triggeredFromHomeKey: Boolean) { mainH.post { if (triggeredFromAltTab && !triggeredFromHomeKey) com.android.quickstep.RecentsActivity.quickCommit() else com.android.quickstep.RecentsActivity.hide() } }
         override fun onAssistantVisibilityChanged(visibility: Float) {}
         override fun onAssistantOverrideInvoked(invocationType: Int) {}
         override fun onRotationProposal(rotation: Int, isValid: Boolean) {}

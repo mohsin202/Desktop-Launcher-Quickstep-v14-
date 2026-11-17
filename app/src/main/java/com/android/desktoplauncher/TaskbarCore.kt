@@ -57,8 +57,7 @@ interface TaskbarHost {
 /**
  * The taskbar itself. It no longer lives in an accessibility service: TouchInteractionService (bound by SystemUI at boot)
  * starts it, so it runs without anything being switched on in Settings > Accessibility. The accessibility service
- * ([TaskbarService]) is an optional helper: when it is on it adds window/IME events, the Alt+Tab hold, key filtering
- * and screenshot colour sampling; without it those just fall back or do nothing.
+ * is not used at all any more.
  */
 class TaskbarCore private constructor(base: Context) : ContextWrapper(base), TaskbarHost {
     companion object {
@@ -75,11 +74,9 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
         fun shutdown() { instance?.stop() }
     }
 
-    private val a11y: TaskbarService? get() = TaskbarService.instance
-    /** With the accessibility service the windows are accessibility overlays; without it, navigation-bar panels. */
-    private fun overlayType(): Int = if (a11y != null) WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY else NavWindow.TYPE
-    private val windows: List<AccessibilityWindowInfo> get() = try { a11y?.windows ?: emptyList() } catch (_: Exception) { emptyList() }
-    private val wm: WindowManager get() = ((a11y ?: baseContext).getSystemService(Context.WINDOW_SERVICE) as WindowManager)
+    private fun overlayType(): Int = NavWindow.TYPE
+    private val windows: List<AccessibilityWindowInfo> get() = emptyList()   // no accessibility service: no window list
+    private val wm: WindowManager get() = (baseContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager)
     private lateinit var uctx: Context
     private var bar: TaskbarView? = null
     /** 0 = bar along the bottom; 1 / 2 = vertical bar over a system navigation bar on the left / right edge. */
@@ -93,26 +90,8 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
     override var imeShown = false
     private var editing = false
     private var editPkg: String? = null
-    private var metaAlone = false
     /** How many Windows-key events this service has been given (shown in the test dialog), the app that was open at the last press, and when it was released. */
-    private var metaSeen = 0
-    private var metaFocus: String? = null
-    private var metaUpAt = 0L
-    private var homeKeySeen = 0
-    fun metaInfo() = "$metaSeen Meta events, $homeKeySeen Home-key events from a keyboard" + if (metaUpAt != 0L) ", last " + (android.os.SystemClock.uptimeMillis() - metaUpAt) / 1000 + " s ago" else ""
 
-    /**
-     * Called when the home screen comes to the front. If that happens right after the Windows key, the system itself took
-     * the key as "go home" (it acted before the key reached this service): bring the app back and open the drawer over it.
-     */
-    fun metaGuard() {
-        val prev = metaFocus ?: return
-        if (metaUpAt == 0L || android.os.SystemClock.uptimeMillis() - metaUpAt > 900) return
-        metaUpAt = 0L
-        if (prev == packageName || !Prefs.bool(this, Prefs.K_WINKEY, true)) return
-        try { packageManager.getLaunchIntentForPackage(prev)?.let { startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } } catch (_: Exception) {}
-        handler.postDelayed({ if (drawer == null) openDrawer() }, 200)
-    }
     private val listener: () -> Unit = { sync() }
     /** Apps the user hid from the taskbar; they only come back when they are opened again. */
     private val dismissed = HashSet<String>()
@@ -207,40 +186,10 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
     }
     private val shadeListener: () -> Unit = { if (sampleWanted()) applySysUiShade() }
 
+    /** SystemUI's value when it has sent one, otherwise the system theme. */
     private fun sampleHandle() {
         if (applySysUiShade()) return
-        val b = bar ?: return
-        if (!sampleWanted() || sampleBusy) return
-        val pm = getSystemService(android.os.PowerManager::class.java)
-        if (pm != null && !pm.isInteractive) return
-        if (android.os.Build.VERSION.SDK_INT < 30) { if (collapsedNow()) b.setHandleDark(themeDark()); return }
-        sampleBusy = true; lastSample = SystemClock.uptimeMillis()
-        try {
-            val svc = a11y
-            if (svc == null) { sampleBusy = false; if (collapsedNow()) b.setHandleDark(themeDark()); return }
-            svc.takeScreenshot(android.view.Display.DEFAULT_DISPLAY, mainExecutor, object : AccessibilityService.TakeScreenshotCallback {
-                override fun onSuccess(r: AccessibilityService.ScreenshotResult) {
-                    var handleDark = themeDark()
-                    var lum: Float? = null
-                    val handle = collapsedNow()
-                    try {
-                        val hb = r.hardwareBuffer
-                        val hw = Bitmap.wrapHardwareBuffer(hb, r.colorSpace)
-                        if (hw != null) {
-                            if (handle) handleDark = (lumOf(hw, handleRects(hw.width, hw.height)) ?: 0f) < 0.5f
-                            else lum = lumOf(hw, bandRects(hw.width, hw.height))
-                            hw.recycle()
-                        }
-                        hb.close()
-                    } catch (t: Throwable) { Log.w("DesktopTaskbar", "Bar colour: $t") }
-                    sampleBusy = false
-                    if (handle) bar?.setHandleDark(handleDark) else applyInk(lum)
-                    // the page behind may change without any window event: look again in a few seconds
-                    if (sampleWanted() && !sampleQueued) { sampleQueued = true; handler.postDelayed(sampleRun, 3000) }
-                }
-                override fun onFailure(errorCode: Int) { sampleBusy = false; if (collapsedNow()) bar?.setHandleDark(themeDark()) }
-            })
-        } catch (t: Throwable) { sampleBusy = false; if (collapsedNow()) b.setHandleDark(themeDark()) }
+        if (collapsedNow()) bar?.setHandleDark(themeDark()) else applyInk(if (themeDark()) 0f else 1f)
     }
 
     /** Light or dark buttons for the average brightness behind the bar (a pill's own scrim is mixed in). */
@@ -356,7 +305,7 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
         if (bar != null) { SysUi.taskbarEnabled(true); SysUi.taskbarStatus(true, false) }
     }
     private val pruneTick = object : Runnable {
-        override fun run() { if (a11y == null) scan() else if (!syncTasks()) pruneDead(); if (bar != null) { navWin = detectNavWin(); setBarShown(systemBarsVisible() || navWin) }; handler.postDelayed(this, if (SysTasks.trusted(this@TaskbarCore)) 1500 else 4000) }
+        override fun run() { scan(); if (bar != null) { navWin = detectNavWin(); setBarShown(systemBarsVisible() || navWin) }; handler.postDelayed(this, if (SysTasks.trusted(this@TaskbarCore)) 1500 else 4000) }
     }
 
     private fun start() {
@@ -388,40 +337,6 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
         if (instance === this) instance = null
     }
 
-    /** The accessibility helper connected / went away: look at the windows again. */
-    fun a11yChanged() { handler.post { scan() } }
-
-    fun onAccessibilityEvent(e: AccessibilityEvent?) {
-        if (e == null) return
-        when (e.eventType) {
-            AccessibilityEvent.TYPE_VIEW_FOCUSED -> {
-                val ed = try { e.source?.isEditable == true } catch (_: Exception) { false }
-                editing = ed
-                editPkg = e.packageName?.toString()
-                scan()
-            }
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                if (e.packageName?.toString() != editPkg && e.className?.toString()?.contains("InputMethod") != true) editing = false
-                scan()
-            }
-            AccessibilityEvent.TYPE_WINDOWS_CHANGED -> scan()
-            AccessibilityEvent.TYPE_VIEW_CLICKED -> {
-                // "Clear all" in the Recents screen: forget every running app.
-                val pkg = e.packageName?.toString() ?: return
-                val fromRecentsUi = pkg == "com.android.systemui" || pkg.contains("launcher", true) ||
-                    pkg.contains("quickstep", true) || pkg.contains("trebuchet", true)
-                if (!fromRecentsUi) return
-                val txt = ((e.text?.joinToString(" ") ?: "") + " " + (e.contentDescription ?: "")).lowercase()
-                if (txt.contains("clear all") || txt.contains("close all") || txt.contains("dismiss all")) {
-                    handler.postDelayed({
-                        running.clear(); dismissed.clear()
-                        bar?.refresh()
-                    }, 600)
-                }
-            }
-        }
-    }
-
     /**
      * Removes apps whose process no longer exists (swiped away from Recents). This only works when the
      * ROM lets third-party apps see other apps' processes; if the list looks restricted we do nothing.
@@ -442,56 +357,6 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
             }
             if (ch) bar?.refresh()
         } catch (_: Exception) {}
-    }
-
-    private var altTabDown = false
-
-    /** Windows / Meta key on a hardware keyboard opens the app drawer. */
-    fun onKeyEvent(e: android.view.KeyEvent): Boolean {
-        // Alt+Tab: hold Alt, Tab cycles the cards in Recents (Shift+Tab backwards), releasing Alt opens the selected one
-        run {
-            val k = e.keyCode
-            if (k == android.view.KeyEvent.KEYCODE_TAB && e.isAltPressed) {
-                if (e.action == android.view.KeyEvent.ACTION_DOWN) {
-                    altTabDown = true
-                    if (e.repeatCount == 0) com.android.quickstep.RecentsActivity.quickStep(this, if (e.isShiftPressed) -1 else 1)
-                }
-                return true
-            }
-            if (k == android.view.KeyEvent.KEYCODE_TAB && altTabDown && e.action == android.view.KeyEvent.ACTION_UP) return true
-            if ((k == android.view.KeyEvent.KEYCODE_ALT_LEFT || k == android.view.KeyEvent.KEYCODE_ALT_RIGHT) &&
-                e.action == android.view.KeyEvent.ACTION_UP && altTabDown) {
-                altTabDown = false
-                com.android.quickstep.RecentsActivity.quickCommit()
-                return false
-            }
-        }
-        val meta = e.keyCode == android.view.KeyEvent.KEYCODE_META_LEFT || e.keyCode == android.view.KeyEvent.KEYCODE_META_RIGHT
-        if (meta) {
-            metaSeen++
-            if (e.action == android.view.KeyEvent.ACTION_DOWN && e.repeatCount == 0) metaFocus = focused
-            if (e.action == android.view.KeyEvent.ACTION_UP) metaUpAt = android.os.SystemClock.uptimeMillis()
-        }
-        // Some keyboard layouts (Android-x86 style) send the Windows key as KEYCODE_HOME: a real keyboard's Home key (deviceId > 0;
-        // our own injected Home has the virtual device) opens the drawer as well, instead of going to the home screen.
-        val homeFromKeyboard = e.keyCode == android.view.KeyEvent.KEYCODE_HOME && e.deviceId > 0 &&
-            (e.source and android.view.InputDevice.SOURCE_KEYBOARD) == android.view.InputDevice.SOURCE_KEYBOARD
-        if (homeFromKeyboard) homeKeySeen++
-        if (bar == null || !Prefs.bool(this, Prefs.K_WINKEY, true)) return false
-        if (homeFromKeyboard) {
-            if (e.action == android.view.KeyEvent.ACTION_UP) toggleDrawer()
-            return true
-        }
-        if (meta) {
-            if (e.action == android.view.KeyEvent.ACTION_DOWN) { if (e.repeatCount == 0) metaAlone = true; return true }
-            if (e.action == android.view.KeyEvent.ACTION_UP) {
-                val was = metaAlone
-                metaAlone = false
-                if (was) toggleDrawer()
-                return true
-            }
-        } else if (e.action == android.view.KeyEvent.ACTION_DOWN) metaAlone = false
-        return false
     }
 
     override fun pickIme() {
@@ -573,16 +438,18 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
     override fun hideRunning(pkg: String) { running.remove(pkg); dismissed.add(pkg); bar?.refresh() }
     override fun closeApp(pkg: String) { Thread { SysTasks.removeApp(this, pkg); handler.post { running.remove(pkg); bar?.refresh() } }.start() }
     override fun canClose(): Boolean = SysTasks.trusted(this)
-    /** Through the accessibility service when it is on; otherwise the equivalent that needs no service. */
+    /** Actions of the old accessibility service, done without it where the system lets an app do so. */
     private fun a11yAction(a: Int) {
-        val svc = a11y
-        if (svc != null) { svc.performGlobalAction(a); return }
         when (a) {
             AccessibilityService.GLOBAL_ACTION_BACK -> SysUi.back()
             AccessibilityService.GLOBAL_ACTION_HOME ->
                 try { startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (_: Exception) {}
             AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS, AccessibilityService.GLOBAL_ACTION_QUICK_SETTINGS -> SysUi.toggleNotifications()
-            else -> {}
+            AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN -> try {
+                val pm = getSystemService(android.os.PowerManager::class.java)
+                pm.javaClass.getMethod("goToSleep", Long::class.javaPrimitiveType).invoke(pm, SystemClock.uptimeMillis())
+            } catch (_: Throwable) {}
+            else -> {}   // split screen, screenshot, power menu: only an accessibility service can do these
         }
     }
     override fun global(action: Int) {
