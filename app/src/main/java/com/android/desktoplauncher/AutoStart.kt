@@ -13,6 +13,7 @@ import android.util.Log
  */
 object AutoStart {
     fun ensureTaskbarService(c: Context): Boolean {
+        TaskbarCore.ensure(c)   // the taskbar itself does not need the accessibility service any more
         if (TaskbarService.instance != null) return true
         if (!Prefs.bool(c, Prefs.K_AUTO_A11Y, true)) return false
         if (c.checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) != PackageManager.PERMISSION_GRANTED) return false

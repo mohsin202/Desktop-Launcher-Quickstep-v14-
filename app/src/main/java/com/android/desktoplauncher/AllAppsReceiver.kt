@@ -10,7 +10,7 @@ import android.content.Intent
  */
 class AllAppsReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent?) {
-        val t = TaskbarService.instance
+        val t = TaskbarCore.instance
         if (t != null) t.toggleDrawer()
         else try { c.startActivity(Intent(c, LauncherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (_: Exception) {}
     }

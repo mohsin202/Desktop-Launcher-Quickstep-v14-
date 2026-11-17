@@ -42,6 +42,8 @@ object SysUi {
     @Volatile var state = 0; private set
     @Volatile var navRegion: Region? = null; private set
     @Volatile var darkIntensity = 0f; private set
+    /** True once SystemUI has told us the buttons' dark intensity (1 = dark buttons = light background). */
+    @Volatile var darkSeen = false; private set
     @Volatile var assistantAvailable = false; private set
 
     /** Called on the main thread whenever something above changed. */
@@ -50,10 +52,10 @@ object SysUi {
     val connected get() = proxy != null
     fun has(flag: Int) = (state and flag) != 0
 
-    internal fun set(p: ISystemUiProxy?) { proxy = p; changed() }
+    internal fun set(p: ISystemUiProxy?) { proxy = p; if (p == null) darkSeen = false; changed() }
     internal fun setState(s: Int) { if (s != state) { state = s; changed() } }
     internal fun setRegion(r: Region?) { navRegion = r; changed() }
-    internal fun setDark(f: Float) { darkIntensity = f; changed() }
+    internal fun setDark(f: Float) { darkIntensity = f; darkSeen = true; changed() }
     internal fun setAssistant(a: Boolean) { assistantAvailable = a }
     private fun changed() { main.post { for (l in ArrayList(listeners)) try { l() } catch (e: Exception) { Log.e(TAG, "listener", e) } } }
 
@@ -91,7 +93,7 @@ class TouchInteractionService : Service() {
             SysUi.set(if (b != null) ISystemUiProxy.Stub.asInterface(b) else null)
             Log.i(TAG, "SystemUI connected, proxy=${b != null}")
             // tell SystemUI the taskbar is the navigation bar (it then draws none of its own and keeps the back gesture)
-            mainH.post { TaskbarService.instance?.onSysUiConnected() }
+            mainH.post { (TaskbarCore.instance ?: TaskbarCore.ensure(applicationContext))?.onSysUiConnected() }
         }
         override fun onActiveNavBarRegionChanges(activeRegion: Region?) { SysUi.setRegion(activeRegion) }
         override fun onSystemUiStateChanged(stateFlags: Int) { SysUi.setState(stateFlags) }
@@ -115,6 +117,7 @@ class TouchInteractionService : Service() {
     override fun onCreate() {
         super.onCreate()
         // SystemUI binds this service at boot: a good moment to switch the taskbar on, without anyone opening Settings
+        startTaskbar()
         AutoStart.ensureTaskbarService(this)
         registerAllApps()
     }
@@ -141,7 +144,16 @@ class TouchInteractionService : Service() {
         }
     }
 
-    override fun onBind(intent: Intent?): IBinder { if (allAppsStatus != "registered") registerAllApps(); return binder }
+    /** The taskbar lives here (not in an accessibility service). Before the first unlock the storage is not readable yet: wait for it. */
+    private fun startTaskbar() {
+        val um = getSystemService(android.os.UserManager::class.java)
+        if (um == null || um.isUserUnlocked) { TaskbarCore.ensure(this); return }
+        registerReceiver(object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: android.content.Context, i: Intent) { unregisterReceiver(this); TaskbarCore.ensure(c) }
+        }, android.content.IntentFilter(Intent.ACTION_USER_UNLOCKED))
+    }
+
+    override fun onBind(intent: Intent?): IBinder { TaskbarCore.ensure(this); if (allAppsStatus != "registered") registerAllApps(); return binder }
 
     override fun onUnbind(intent: Intent?): Boolean {
         SysUi.set(null)

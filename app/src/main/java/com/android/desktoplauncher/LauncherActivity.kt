@@ -154,7 +154,7 @@ class LauncherActivity : Activity() {
         val bottom = when {
             phone && barOn() -> catMargin + dp(32)
             phone -> catMargin + dp(32)
-            !phone && barOn() && TaskbarService.instance != null -> maxOf(padBottom, dp(Prefs.tbDp(this)))
+            !phone && barOn() && TaskbarCore.instance != null -> maxOf(padBottom, dp(Prefs.tbDp(this)))
             else -> padBottom
         }
         MenuArea.bottomReserve = bottom
@@ -178,7 +178,7 @@ class LauncherActivity : Activity() {
     }
 
     override fun onResume() {
-        TaskbarService.instance?.metaGuard()
+        TaskbarCore.instance?.metaGuard()
         super.onResume()
         applyMode()
         updateBanner()
@@ -202,9 +202,8 @@ class LauncherActivity : Activity() {
                 }
             }
             banner.visibility = android.view.View.VISIBLE
-        } else if (TaskbarService.instance == null && !AutoStart.ensureTaskbarService(this)) {
-            banner.text = "Tap: turn on Accessibility to show the taskbar"
-            banner.setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+        } else if (TaskbarCore.instance == null && TaskbarCore.ensure(this) == null) {
+            banner.text = "The taskbar could not start"
             banner.visibility = android.view.View.VISIBLE
         } else banner.visibility = android.view.View.GONE
     }
@@ -213,8 +212,8 @@ class LauncherActivity : Activity() {
         super.onNewIntent(intent)
         setIntent(intent)
         if (intent.action == ACTION_TOGGLE_DRAWER) toggleDrawer()
-        else if (intent.action == ACTION_CATEGORIES) { closeWidgetSheet(); closeDrawer(); TaskbarService.instance?.closeDrawer(); openCats() }
-        else { closeWidgetSheet(); closeDrawer(); closeCats(); TaskbarService.instance?.closeDrawer(); desktop.clearSelection(); desktop.closeFolder(); desktop.goHome() }
+        else if (intent.action == ACTION_CATEGORIES) { closeWidgetSheet(); closeDrawer(); TaskbarCore.instance?.closeDrawer(); openCats() }
+        else { closeWidgetSheet(); closeDrawer(); closeCats(); TaskbarCore.instance?.closeDrawer(); desktop.clearSelection(); desktop.closeFolder(); desktop.goHome() }
     }
 
     override fun onConfigurationChanged(c: Configuration) {
@@ -252,7 +251,7 @@ class LauncherActivity : Activity() {
     }
 
     fun toggleDrawer() {
-        val svc = TaskbarService.instance
+        val svc = TaskbarCore.instance
         if (svc != null && Modes.tablet(this) && barOn()) { svc.toggleDrawer(); return }
         if (drawer != null) closeDrawer() else {
             val bm = if (!Modes.tablet(this) && barOn()) padBottom + dockH + dp(16) else padBottom + dp(8)
@@ -289,7 +288,7 @@ class LauncherActivity : Activity() {
         drawer = null
         drawerDragging = false
         syncBlur()
-        TaskbarService.instance?.closeDrawer()
+        TaskbarCore.instance?.closeDrawer()
     }
 
     // ------------------------------------------------------------ widgets
@@ -322,7 +321,7 @@ class LauncherActivity : Activity() {
             }
         }
         val bottom = if (!Modes.tablet(this) && barOn()) padBottom + dockH + dp(16)
-            else if (Modes.tablet(this) && barOn() && TaskbarService.instance != null) maxOf(padBottom, dp(Prefs.tbDp(this))) else padBottom
+            else if (Modes.tablet(this) && barOn() && TaskbarCore.instance != null) maxOf(padBottom, dp(Prefs.tbDp(this))) else padBottom
         val sh = WidgetSheet(this, all, padTop, bottom, { w, h -> desktop.spansFor(w, h) }) { closeWidgetSheet() }
         root.addView(sh, FrameLayout.LayoutParams(MATCH, MATCH))
         sheet = sh
@@ -342,7 +341,7 @@ class LauncherActivity : Activity() {
 
     /** Search bar widget: opens the app drawer with the search field focused. */
     fun openSearchFromWidget() {
-        val svc = TaskbarService.instance
+        val svc = TaskbarCore.instance
         if (svc != null && Modes.tablet(this) && barOn()) svc.openSearch() else dockHost.openSearch()
     }
 
