@@ -111,19 +111,6 @@
             android:resizeableActivity="true"
             android:theme="@style/Theme.Desktop.Hidden" />
 
-        <service
-            android:name=".TaskbarService"
-            android:exported="true"
-            android:label="Desktop Launcher taskbar"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/accessibility_config" />
-        </service>
-
         <!-- SystemUI binds this service (config_recentsComponentName = com.android.launcher3/...RecentsActivity) and
              hands over the ISystemUiProxy. Only SystemUI may bind it (STATUS_BAR_SERVICE). -->
         <receiver android:name=".AllAppsReceiver" android:exported="false" />
