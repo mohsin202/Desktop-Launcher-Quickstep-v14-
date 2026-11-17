@@ -64,16 +64,31 @@ class RecentsActivity : Activity() {
         }
         fun hide() { current?.leave() }
         fun toggle(c: Context) { if (current != null) hide() else show(c) }
+
+        // Alt+Tab quick switch (called from the accessibility key filter, main thread)
+        private val pendingSteps = ArrayList<Int>()
+        private var commitWanted = false
+        fun quickStep(c: Context, dir: Int) {
+            commitWanted = false
+            val a = current
+            if (a != null && a.built) a.quickMove(dir) else { pendingSteps.add(dir); if (a == null) show(c) }
+        }
+        fun quickCommit() {
+            val a = current
+            if (a != null && a.built) a.quickOpen() else if (a != null || pendingSteps.isNotEmpty()) commitWanted = true
+        }
     }
 
     private val main = Handler(Looper.getMainLooper())
-    private lateinit var scroll: Carousel
-    private lateinit var row: LinearLayout
+    private lateinit var scroll: HScroll
+    private lateinit var grid: Grid
+    private var vw = 0; private var vh = 0; private var reserveB = 0
+    private var selCard: TaskCard? = null
     private lateinit var empty: TextView
     private lateinit var memory: TextView
     private val cards = ArrayList<TaskCard>()
     private var clearAll: TextView? = null
-    private var built = false
+    var built = false; private set
     private var tasks: List<RTask> = emptyList()
     private var leaving = false
     private var menu: PopupWindow? = null
@@ -94,13 +109,9 @@ class RecentsActivity : Activity() {
         root.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
             if (!built && v.width > 0 && v.height > 0) v.post { if (!built) safeRebuild(v.width, v.height) }
         }
-        scroll = Carousel(this) { leave() }
-        row = LinearLayout(this).also {
-            it.orientation = LinearLayout.HORIZONTAL
-            it.gravity = Gravity.CENTER_VERTICAL
-            it.layoutTransition = LayoutTransition().also { t -> t.disableTransitionType(LayoutTransition.CHANGE_APPEARING) }
-        }
-        scroll.addView(row, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        scroll = HScroll(this) { leave() }
+        grid = Grid(this, rtl())
+        scroll.addView(grid, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
         root.addView(scroll, FrameLayout.LayoutParams(-1, -1))
         empty = TextView(this).also {
             it.setTextColor(Colors.text(this)); it.textSize = 20f; it.gravity = Gravity.CENTER; it.visibility = View.GONE
@@ -137,22 +148,15 @@ class RecentsActivity : Activity() {
         built = true
         if (tasks.isEmpty()) {
             empty.text = UiText.text(this, "No recent items") + "\n\n" + Recents.diag
+            pendingSteps.clear(); commitWanted = false
             empty.visibility = View.VISIBLE; return
         }
         val showMem = Prefs.bool(this, Prefs.K_REC_MEM, false)
         if (showMem) memory.visibility = View.VISIBLE
-        val dm = resources.displayMetrics
-        // The picture uses up to 70% of the height; header (icon, name, close) above it, same proportions as the screen
-        val header = dp(48)
         val barRoom = if (com.android.desktoplauncher.NavMode.gesture(this)) dp(56) else 0   // the floating taskbar
-        val reserve = (if (showMem) dp(56) else dp(24)) + barRoom
-        val cardH = ((h - header - reserve) * 0.80f).toInt().coerceAtLeast(dp(120))
-        val cardW = (cardH * dm.widthPixels.toFloat() / dm.heightPixels).toInt().coerceAtMost(w - dp(48)).coerceAtLeast(dp(120))
-        val side = (w - cardW) / 2
-        row.setPadding(side, 0, side, (if (showMem) dp(28) else 0) + barRoom)
-        val spacing = dp(PAGE_SPACING_DP)
-        // newest first in [tasks]; shown newest on the right (left in right-to-left), "Clear all" on the far other end
-        val order = if (rtl()) tasks else tasks.reversed()
+        vw = w; vh = h
+        reserveB = (if (showMem) dp(56) else dp(24)) + barRoom
+        // newest first: tasks[0] is the focus card (the app that was open), the others follow in a two-row grid
         val btn = TextView(this).also {
             it.text = UiText.text(this, "Clear all")
             it.setTextColor(Colors.text(this)); it.textSize = 16f; it.gravity = Gravity.CENTER
@@ -161,19 +165,56 @@ class RecentsActivity : Activity() {
             it.setOnClickListener { clearEverything() }
         }
         clearAll = btn
-        if (!rtl()) row.addView(btn, lp(WRAP, WRAP, spacing, 0))
-        for (t in order) {
-            val c = TaskCard(this, t, cardW, cardH, header, { open(t) }, { dismiss(it) }, { v -> showMenu(v, t) })
+        for (t in tasks) {
+            val c = TaskCard(this, t, dp(100), dp(100), dp(56), { open(t) }, { dismiss(it) }, { v -> showMenu(v, t) })
             cards.add(c)
-            row.addView(c, lp(cardW, cardH + header, spacing / 2, 0))
+            grid.addView(c)
         }
-        if (rtl()) row.addView(btn, lp(WRAP, WRAP, spacing, 0))
-        scroll.post {
-            // start on the newest card (the app that was open): right end for left-to-right, left end for right-to-left
-            if (rtl()) scroll.scrollTo(0, 0) else scroll.scrollTo(row.width, 0)
-            scroll.cardW = cardW + spacing
-            scroll.snapNow()
+        grid.addView(btn)
+        layoutAll()
+        val steps = ArrayList(pendingSteps); pendingSteps.clear()
+        if (steps.isNotEmpty()) { selIdx = 0; for (d in steps) quickMove(d) }
+        if (commitWanted) { commitWanted = false; main.post { quickOpen() } }
+        grid.afterLayout = { grid.post { scroll.scrollTo(if (rtl()) (grid.width - vw).coerceAtLeast(0) else 0, 0) } }
+    }
+
+    /**
+     * Trebuchet's tablet overview: the focus task up to 70% of the screen, centred; the other tasks in two rows to its side,
+     * each row as tall as half the free height. Margins/spacing are the stock sw720dp values.
+     */
+    private fun layoutAll() {
+        if (cards.isEmpty()) return
+        val dm = resources.displayMetrics
+        val sw = dm.widthPixels.toFloat(); val sh = dm.heightPixels.toFloat()
+        val side = dp(64); val top = dp(64); val rowSp = dp(36); val pageSp = dp(44); val header = dp(56)
+        val gridW = (vw - 2 * side).coerceAtLeast(dp(200)); val gridH = (vh - top - reserveB).coerceAtLeast(dp(200))
+        val scale = minOf(gridW / sw, gridH / sh, 0.7f)
+        val fw = (sw * scale).toInt(); val fh = (sh * scale).toInt()
+        val fx = (vw - fw) / 2; val fy = top + (gridH - fh) / 2
+        fun put(c: TaskCard, x: Int, y: Int, w: Int, h: Int) {
+            c.resize(w, h, header)
+            grid.place(c, x, y - header, w, h + header)
         }
+        put(cards[0], fx, fy, fw, fh)
+        val rowH = (gridH + top - rowSp) / 2
+        val th = (rowH - top).coerceAtLeast(dp(80)); val tw = (th * sw / sh).toInt()
+        var topEnd = fx + fw + pageSp; var botEnd = topEnd
+        for (i in 1 until cards.size) {
+            val isTop = topEnd <= botEnd
+            val x = if (isTop) topEnd else botEnd
+            put(cards[i], x, if (isTop) top else top + th + rowSp + top, tw, th)
+            if (isTop) topEnd += tw + pageSp else botEnd += tw + pageSp
+        }
+        val btn = clearAll
+        var total = Math.max(topEnd, botEnd)
+        if (btn != null) {
+            btn.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED)
+            val bw = btn.measuredWidth; val bh = btn.measuredHeight
+            grid.place(btn, total, top + (gridH - bh) / 2, bw, bh)
+            total += bw
+        }
+        grid.contentW = Math.max(total + side, vw)
+        grid.requestLayout()
     }
 
     private val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
@@ -222,8 +263,9 @@ class RecentsActivity : Activity() {
 
     private fun dismiss(c: TaskCard) {
         Thread { Recents.remove(c.task.id) }.start()
-        row.removeView(c); cards.remove(c)
-        if (cards.isEmpty()) main.postDelayed({ leave() }, 180)
+        grid.removeView(c); cards.remove(c)
+        if (selCard === c) selCard = null
+        if (cards.isEmpty()) main.postDelayed({ leave() }, 180) else layoutAll()
     }
 
     private fun clearEverything() {
@@ -244,10 +286,46 @@ class RecentsActivity : Activity() {
     override fun onKeyDown(code: Int, e: KeyEvent): Boolean {
         when (code) {
             KeyEvent.KEYCODE_ESCAPE -> { leave(); return true }
-            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> { scroll.step(if (code == KeyEvent.KEYCODE_DPAD_LEFT) -1 else 1); return true }
-            KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> { cards.minByOrNull { scroll.distanceToCenter(it) }?.let { open(it.task) }; return true }
+            KeyEvent.KEYCODE_DPAD_LEFT -> { moveSel(-1, 0); return true }
+            KeyEvent.KEYCODE_DPAD_RIGHT -> { moveSel(1, 0); return true }
+            KeyEvent.KEYCODE_DPAD_UP -> { moveSel(0, -1); return true }
+            KeyEvent.KEYCODE_DPAD_DOWN -> { moveSel(0, 1); return true }
+            KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> { (selCard ?: cards.firstOrNull())?.let { open(it.task) }; return true }
         }
         return super.onKeyDown(code, e)
+    }
+
+    private var selIdx = 0
+    /** Alt+Tab: step through the cards in order (wrapping), the first step lands on the previous app. */
+    fun quickMove(dir: Int) {
+        if (cards.isEmpty()) return
+        selIdx = ((if (selCard == null) 0 else cards.indexOf(selCard).coerceAtLeast(0)) + dir + cards.size) % cards.size
+        select(cards[selIdx])
+    }
+    fun quickOpen() {
+        val c = selCard ?: cards.firstOrNull()
+        if (c != null) open(c.task) else leave()
+    }
+
+    /** Keyboard selection: the first arrow press marks the focus card, the next ones move to the nearest card in that direction. */
+    private fun moveSel(dx: Int, dy: Int) {
+        val cur = selCard
+        if (cur == null) { cards.firstOrNull()?.let { select(it) }; return }
+        fun cx(v: View) = v.left + v.width / 2
+        fun cy(v: View) = v.top + v.height * 3 / 5
+        val best = cards.filter { it !== cur && (if (dx != 0) (cx(it) - cx(cur)) * dx > 4 else (cy(it) - cy(cur)) * dy > 4) }
+            .minByOrNull {
+                val ax = Math.abs(cx(it) - cx(cur)); val ay = Math.abs(cy(it) - cy(cur))
+                if (dx != 0) ax + 3 * ay else ay + 3 * ax
+            } ?: return
+        select(best)
+    }
+    private fun select(c: TaskCard) {
+        selCard?.setSelected2(false)
+        selCard = c; c.setSelected2(true)
+        val m = dp(64)
+        if (c.left < scroll.scrollX + m || c.right > scroll.scrollX + vw - m)
+            scroll.smoothScrollTo((c.left + c.width / 2 - vw / 2).coerceIn(0, Math.max(0, grid.width - vw)), 0)
     }
 
     @Deprecated("Deprecated in Java")
@@ -268,55 +346,63 @@ class RecentsActivity : Activity() {
     }
 }
 
-/** The row of cards: scrolls sideways, settles on the nearest card, a tap on empty space leaves. */
-private class Carousel(c: Context, val onEmptyTap: () -> Unit) : HorizontalScrollView(c) {
-    var cardW = 0
+/** Scrolls sideways (the mouse wheel too); a tap on empty space leaves. */
+private class HScroll(c: Context, val onEmptyTap: () -> Unit) : HorizontalScrollView(c) {
     private val slop = ViewConfiguration.get(c).scaledTouchSlop
-    private var downX = 0f; private var downY = 0f; private var down = false
-    private val snap = Runnable { snapNow() }
+    private var downX = 0f; private var downY = 0f
 
-    init { isHorizontalScrollBarEnabled = false; overScrollMode = OVER_SCROLL_NEVER; isFillViewport = true }
-
-    private fun centers(): List<Pair<View, Int>> {
-        val row = getChildAt(0) as? ViewGroup ?: return emptyList()
-        return (0 until row.childCount).map { row.getChildAt(it) }.filter { it is TaskCard }.map { it to (it.left + it.width / 2) }
-    }
-    fun distanceToCenter(v: View): Int = Math.abs((v.left + v.width / 2) - (scrollX + width / 2))
-
-    fun snapNow() {
-        val mid = scrollX + width / 2
-        val t = centers().minByOrNull { Math.abs(it.second - mid) } ?: return
-        smoothScrollTo(t.second - width / 2, 0)
-    }
-    fun step(dir: Int) {
-        val c = centers().sortedBy { it.second }
-        if (c.isEmpty()) return
-        val mid = scrollX + width / 2
-        val cur = c.indices.minByOrNull { Math.abs(c[it].second - mid) } ?: 0
-        smoothScrollTo(c[(cur + dir).coerceIn(0, c.size - 1)].second - width / 2, 0)
-    }
-
-    override fun onScrollChanged(l: Int, t: Int, ol: Int, ot: Int) {
-        super.onScrollChanged(l, t, ol, ot)
-        removeCallbacks(snap)
-        if (!down) postDelayed(snap, 110)
-    }
+    init { isHorizontalScrollBarEnabled = false; overScrollMode = OVER_SCROLL_NEVER }
 
     override fun onTouchEvent(ev: MotionEvent): Boolean {
         when (ev.actionMasked) {
-            MotionEvent.ACTION_DOWN -> { down = true; downX = ev.x; downY = ev.y; removeCallbacks(snap) }
-            MotionEvent.ACTION_UP -> {
-                down = false
-                if (Math.abs(ev.x - downX) < slop && Math.abs(ev.y - downY) < slop) onEmptyTap()
-                else postDelayed(snap, 110)
-            }
-            MotionEvent.ACTION_CANCEL -> { down = false; postDelayed(snap, 110) }
+            MotionEvent.ACTION_DOWN -> { downX = ev.x; downY = ev.y }
+            MotionEvent.ACTION_UP -> if (Math.abs(ev.x - downX) < slop && Math.abs(ev.y - downY) < slop) onEmptyTap()
         }
         return super.onTouchEvent(ev)
     }
-    override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
-        if (ev.actionMasked == MotionEvent.ACTION_DOWN) { down = true; removeCallbacks(snap) }
-        return super.onInterceptTouchEvent(ev)
+
+    override fun onGenericMotionEvent(ev: MotionEvent): Boolean {
+        if (ev.actionMasked == MotionEvent.ACTION_SCROLL) {
+            val d = ev.getAxisValue(MotionEvent.AXIS_VSCROLL) + ev.getAxisValue(MotionEvent.AXIS_HSCROLL)
+            if (d != 0f) { smoothScrollBy((-d * 160 * resources.displayMetrics.density / 2).toInt(), 0); return true }
+        }
+        return super.onGenericMotionEvent(ev)
+    }
+}
+
+/** Places each child at an explicit spot (logical left-to-right coordinates, mirrored in right-to-left); children that move slide there. */
+private class Grid(c: Context, val rtl: Boolean) : ViewGroup(c) {
+    private val spots = HashMap<View, IntArray>()
+    var contentW = 0
+    var afterLayout: (() -> Unit)? = null
+
+    init { clipChildren = false; clipToPadding = false }
+
+    fun place(v: View, x: Int, y: Int, w: Int, h: Int) { spots[v] = intArrayOf(x, y, w, h) }
+    override fun removeView(v: View) { spots.remove(v); super.removeView(v) }
+
+    override fun onMeasure(wSpec: Int, hSpec: Int) {
+        for (i in 0 until childCount) {
+            val v = getChildAt(i); val s = spots[v]
+            if (s != null) v.measure(MeasureSpec.makeMeasureSpec(s[2], MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(s[3], MeasureSpec.EXACTLY))
+        }
+        setMeasuredDimension(contentW, MeasureSpec.getSize(hSpec))
+    }
+
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        for (i in 0 until childCount) {
+            val v = getChildAt(i); val s = spots[v] ?: continue
+            val nl = if (rtl) contentW - s[0] - s[2] else s[0]
+            val had = v.width > 0
+            val ol = v.left; val ot = v.top
+            v.layout(nl, s[1], nl + s[2], s[1] + s[3])
+            if (had && (ol != nl || ot != s[1])) {
+                v.translationX += (ol - nl); v.translationY += (ot - s[1])
+                v.animate().translationX(0f).translationY(0f).setDuration(220).start()
+            }
+        }
+        val f = afterLayout
+        if (f != null && width > 0) { afterLayout = null; f() }
     }
 }
 
@@ -354,9 +440,11 @@ private class CloseButton(c: Context) : View(c) {
 }
 
 /** A task: icon + name pill and a close button above, the task's picture below. Swipe up (or middle-click) removes it. */
-private class TaskCard(c: Context, val task: RTask, val cw: Int, val ch: Int, val headerH: Int,
+private class TaskCard(c: Context, val task: RTask, var cw: Int, var ch: Int, var headerH: Int,
                        val onOpen: () -> Unit, val onClose: (TaskCard) -> Unit, val onMenu: (View) -> Unit) : LinearLayout(c) {
     private val thumb = Thumb(c, task)
+    private val header = FrameLayout(c)
+    private val title = TextView(c)
     private val slop = ViewConfiguration.get(c).scaledTouchSlop
     private var downX = 0f; private var downY = 0f; private var dragging = false
     private var vt: VelocityTracker? = null
@@ -364,7 +452,6 @@ private class TaskCard(c: Context, val task: RTask, val cw: Int, val ch: Int, va
     init {
         orientation = VERTICAL
         clipChildren = false
-        val header = FrameLayout(c)
         val pill = LinearLayout(c).also {
             it.orientation = HORIZONTAL; it.gravity = Gravity.CENTER_VERTICAL
             it.background = GradientDrawable().apply { cornerRadius = c.dp(22).toFloat(); setColor(Colors.surfaceHigh(c)) }
@@ -375,10 +462,10 @@ private class TaskCard(c: Context, val task: RTask, val cw: Int, val ch: Int, va
         }
         val icon = ImageView(c).also { it.setImageBitmap(iconBitmap(c, task.icon, c.dp(48))); it.scaleType = ImageView.ScaleType.FIT_CENTER }
         pill.addView(icon, LayoutParams(c.dp(32), c.dp(32)))
-        val title = TextView(c).also {
+        title.also {
             it.text = task.label; it.setTextColor(Colors.text(c)); it.textSize = 14f
             it.maxLines = 1; it.ellipsize = TextUtils.TruncateAt.END; it.setPadding(c.dp(8), 0, 0, 0)
-            it.maxWidth = cw - c.dp(110)
+            it.maxWidth = Math.max(cw - c.dp(110), c.dp(60))
         }
         pill.addView(title, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
         header.addView(pill, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, c.dp(40), Gravity.START or Gravity.CENTER_VERTICAL))
@@ -398,6 +485,16 @@ private class TaskCard(c: Context, val task: RTask, val cw: Int, val ch: Int, va
             false
         }
     }
+
+    fun resize(w: Int, h: Int, hh: Int) {
+        if (w == cw && h == ch && hh == headerH) return
+        cw = w; ch = h; headerH = hh
+        (header.layoutParams as LayoutParams).also { it.width = w; it.height = hh }
+        (thumb.layoutParams as LayoutParams).also { it.width = w; it.height = h }
+        title.maxWidth = Math.max(w - context.dp(110), context.dp(60))
+        requestLayout()
+    }
+    fun setSelected2(on: Boolean) = thumb.setSel(on)
 
     override fun onInterceptTouchEvent(ev: MotionEvent): Boolean = false
 
@@ -439,6 +536,7 @@ private class Thumb(c: Context, val task: RTask) : View(c) {
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).also { it.style = Paint.Style.STROKE }
     private val radius = c.dp(24).toFloat()
     private var hover = false
+    private var sel = false
     private val icon: Drawable = task.icon.constantState?.newDrawable()?.mutate() ?: task.icon
 
     init {
@@ -453,6 +551,7 @@ private class Thumb(c: Context, val task: RTask) : View(c) {
     }
 
     fun setHover(on: Boolean) { if (hover != on) { hover = on; invalidate() } }
+    fun setSel(on: Boolean) { if (sel != on) { sel = on; invalidate() } }
 
     override fun onDraw(cv: Canvas) {
         val b = bmp
@@ -465,7 +564,7 @@ private class Thumb(c: Context, val task: RTask) : View(c) {
             val sc = Math.max(width.toFloat() / b.width, height.toFloat() / b.height)
             cv.drawBitmap(b, null, RectF(0f, 0f, b.width * sc, b.height * sc), paint)
         }
-        if (hover) {
+        if (hover || sel) {
             val w = context.dp(4).toFloat()
             stroke.strokeWidth = w
             stroke.color = Colors.accent(context)
