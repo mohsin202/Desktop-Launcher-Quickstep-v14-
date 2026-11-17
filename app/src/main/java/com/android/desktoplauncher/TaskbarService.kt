@@ -404,8 +404,28 @@ class TaskbarService : AccessibilityService(), TaskbarHost {
         } catch (_: Exception) {}
     }
 
+    private var altTabDown = false
+
     /** Windows / Meta key on a hardware keyboard opens the app drawer. */
     override fun onKeyEvent(e: android.view.KeyEvent): Boolean {
+        // Alt+Tab: hold Alt, Tab cycles the cards in Recents (Shift+Tab backwards), releasing Alt opens the selected one
+        run {
+            val k = e.keyCode
+            if (k == android.view.KeyEvent.KEYCODE_TAB && e.isAltPressed) {
+                if (e.action == android.view.KeyEvent.ACTION_DOWN) {
+                    altTabDown = true
+                    if (e.repeatCount == 0) com.android.quickstep.RecentsActivity.quickStep(this, if (e.isShiftPressed) -1 else 1)
+                }
+                return true
+            }
+            if (k == android.view.KeyEvent.KEYCODE_TAB && altTabDown && e.action == android.view.KeyEvent.ACTION_UP) return true
+            if ((k == android.view.KeyEvent.KEYCODE_ALT_LEFT || k == android.view.KeyEvent.KEYCODE_ALT_RIGHT) &&
+                e.action == android.view.KeyEvent.ACTION_UP && altTabDown) {
+                altTabDown = false
+                com.android.quickstep.RecentsActivity.quickCommit()
+                return false
+            }
+        }
         val meta = e.keyCode == android.view.KeyEvent.KEYCODE_META_LEFT || e.keyCode == android.view.KeyEvent.KEYCODE_META_RIGHT
         if (meta) {
             metaSeen++
