@@ -45,6 +45,7 @@ object Prefs {
     const val K_AUTOHIDE = "autoHideBar"
     /** Three-button navigation: draw the taskbar as a floating pill. */
     const val K_PILL = "pillBar"
+    const val K_EDGE_BACK = "edgeBack"
     /** Flat taskbar: transparent, so it takes the colour of the app behind it (on) or keeps the Material You colour (off). */
     const val K_BAR_CLEAR = "barClear"
     /** Strength of the transparent bar's scrim, 0..100 %. */

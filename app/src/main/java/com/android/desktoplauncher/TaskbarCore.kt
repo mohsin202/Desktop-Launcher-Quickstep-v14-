@@ -346,6 +346,7 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
     fun stop() {
         SysUi.listeners.remove(shadeListener)
         stopSampler()
+        edge?.stop()
         try { baseContext.unregisterComponentCallbacks(configCb) } catch (_: Throwable) {}
         handler.removeCallbacks(pruneTick)
         try { contentResolver.unregisterContentObserver(navObserver) } catch (_: Throwable) {}
@@ -508,7 +509,16 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
     }
 
     /** Re-reads preferences: adds/removes the bar and updates its size. */
+    private var edge: EdgeGestures? = null
+    /** Edge back gesture: only in gesture navigation and when switched on. */
+    private fun updateEdge() {
+        val want = NavMode.gesture(this) && Prefs.bool(this, Prefs.K_EDGE_BACK, true)
+        if (want) { val e = edge ?: EdgeGestures(this) { SysUi.back() }.also { edge = it }; e.start() }
+        else edge?.stop()
+    }
+
     private fun sync(refresh: Boolean = true) {
+        updateEdge()
         try {
             val keyguardLocked = try { getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == true } catch (_: Exception) { false }
             if (keyguardLocked) {
