@@ -18,6 +18,13 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import java.io.File
 
+/** Last steps of a file drag-out, shown in Settings > Windows > Freeform test (toasts are not reliable there). */
+object DragLog {
+    private val lines = ArrayDeque<String>()
+    @Synchronized fun add(s: String) { lines.addLast(java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date()) + " " + s); while (lines.size > 14) lines.removeFirst() }
+    @Synchronized fun text(): String = if (lines.isEmpty()) "no drag yet" else lines.joinToString("\n  ", prefix = "\n  ")
+}
+
 sealed class Entry {
     abstract val key: String
     class AppE(val info: AppInfo) : Entry() { override val key = "app:" + info.comp.flattenToString() }
@@ -93,10 +100,12 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
             val ls = event.localState
             if (ls is Entry.FileE && ls === sysEntry) {
                 return@setOnDragListener when (event.action) {
+                    android.view.DragEvent.ACTION_DRAG_STARTED -> { DragLog.add("listener: DRAG_STARTED"); true }
                     android.view.DragEvent.ACTION_DRAG_LOCATION -> { edgeHover(event.x); showHover(event.x, event.y, ls); true }
                     android.view.DragEvent.ACTION_DRAG_EXITED -> { edgeStop(); showHover(-1f, -1f, null); true }
                     android.view.DragEvent.ACTION_DROP -> {
                         edgeStop(); showHover(-1f, -1f, null)
+                        DragLog.add("listener: DROP arrived in the LAUNCHER at " + event.x.toInt() + "," + event.y.toInt())
                         val v = sysView
                         if (v != null && !sysFlipped && v.isAttachedToWindow) {
                             val loc = IntArray(2); getLocationOnScreen(loc)
@@ -107,6 +116,7 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
                     android.view.DragEvent.ACTION_DRAG_ENDED -> {
                         edgeStop(); showHover(-1f, -1f, null)
                         sysEntry = null; sysView = null; dragLock = false
+                        DragLog.add("listener: DRAG_ENDED accepted=" + event.result)
                         if (!event.result) rebuild()
                         true
                     }
@@ -226,8 +236,8 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
     private var sysY0 = 0f
 
     private fun startFileDrag(e: Entry.FileE, v: View, rawX: Float, rawY: Float): Boolean {
-        if (!e.file.isFile) { context.toast("Drag out: not a plain file (" + e.file.name + ")"); return false }
-        if (v.width <= 0 || v.height <= 0) { context.toast("Drag out: icon has no size"); return false }
+        if (!e.file.isFile) { DragLog.add("not a plain file: " + e.file.name); return false }
+        if (v.width <= 0 || v.height <= 0) { DragLog.add("icon has no size"); return false }
         val bmp = android.graphics.Bitmap.createBitmap(v.width, v.height, android.graphics.Bitmap.Config.ARGB_8888)
         val tx = v.translationX; val ty = v.translationY
         v.translationX = 0f; v.translationY = 0f
@@ -242,8 +252,9 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
         sysEntry = e; sysView = v; sysFlipped = false; sysX0 = rawX; sysY0 = rawY
         val ok = try {
             v.startDragAndDrop(clip, shadow, e, View.DRAG_FLAG_GLOBAL or View.DRAG_FLAG_GLOBAL_URI_READ)
-        } catch (t: Throwable) { context.toast("Drag out failed: " + t.javaClass.simpleName + " " + (t.message ?: "")); false }
-        if (!ok) { sysEntry = null; sysView = null; v.translationX = tx; v.translationY = ty; context.toast("Drag out refused by the system") }
+        } catch (t: Throwable) { DragLog.add("startDragAndDrop threw " + t.javaClass.simpleName + " " + (t.message ?: "")); false }
+        if (ok) DragLog.add("startDragAndDrop returned true for " + e.file.name)
+        if (!ok) { sysEntry = null; sysView = null; v.translationX = tx; v.translationY = ty; DragLog.add("startDragAndDrop returned false") }
         return ok
     }
 
@@ -1687,6 +1698,7 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
                     }
                     if (state == 2) {
                         if (far) moved = true
+                        if (!sysTried && far) DragLog.add("move reached: entry=" + e.javaClass.simpleName + " mouse=" + mouse + " state=" + state)
                         if (e is Entry.FileE && far && sysEntry == null && !sysTried) {
                             sysTried = true
                             if (startFileDrag(e, v, x0, y0)) return true

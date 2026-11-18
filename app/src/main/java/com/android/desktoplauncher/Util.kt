@@ -456,6 +456,7 @@ object Launch {
         line("Task list from the system", SysTasks.tasks(c)?.let { it.size.toString() + " tasks: " + it.joinToString(", ") { t -> t.pkg + "#" + t.id + "/m" + t.mode } } ?: "not available (accessibility fallback in use)")
         line("Button colour", if ((TaskbarCore.instance?.sampleInfo() ?: "").contains("works")) "from SurfaceFlinger brightness sampling" else if (SysUi.darkSeen) "from SystemUI, value " + SysUi.darkIntensity else "guessed from the app on top / wallpaper")
         line("Pointer at bottom edge (full-screen)", EdgeHover.status)
+        line("File drag-out log", DragLog.text())
         line("Brightness sampling", TaskbarCore.instance?.sampleInfo() ?: "taskbar not running")
         line("Taskbar window", TaskbarCore.instance?.let { if (it.navMode) "navigation bar (space reserved)" else "overlay (fallback)" } ?: "not running")
         line("SystemUI connected (Quickstep)", SysUi.connected)
