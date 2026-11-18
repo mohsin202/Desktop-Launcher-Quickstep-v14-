@@ -70,6 +70,12 @@ object SysTasks {
         return any
     }
 
+    /** Screen pinning of one task (what the stock overview's "Pin" does). */
+    fun pin(id: Int): Boolean = try {
+        val s = atms() ?: return false
+        s.javaClass.getMethod("startSystemLockTaskMode", Int::class.javaPrimitiveType).invoke(s, id); true
+    } catch (_: Throwable) { false }
+
     fun setMode(id: Int, mode: Int): Boolean = try {
         val s = atms() ?: return false
         s.javaClass.getMethod("setTaskWindowingMode", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType, Boolean::class.javaPrimitiveType)
