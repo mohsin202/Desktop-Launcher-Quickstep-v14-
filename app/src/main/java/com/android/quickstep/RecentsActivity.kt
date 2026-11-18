@@ -65,7 +65,7 @@ class RecentsActivity : Activity() {
         fun hide() { current?.leave() }
         fun toggle(c: Context) { if (current != null) hide() else show(c) }
 
-        // Alt+Tab quick switch (called from the accessibility key filter, main thread)
+        // Alt+Tab quick switch (from SystemUI's Alt+Tab callbacks, main thread)
         private val pendingSteps = ArrayList<Int>()
         private var commitWanted = false
         fun quickStep(c: Context, dir: Int) {
@@ -92,6 +92,8 @@ class RecentsActivity : Activity() {
     private var tasks: List<RTask> = emptyList()
     private var leaving = false
     private var menu: PopupWindow? = null
+    private var splitFirst: RTask? = null          // split screen: the first app is chosen, now the second
+    private lateinit var splitHint: TextView
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
@@ -110,6 +112,7 @@ class RecentsActivity : Activity() {
             if (!built && v.width > 0 && v.height > 0) v.post { if (!built) safeRebuild(v.width, v.height) }
         }
         scroll = HScroll(this) { leave() }
+        scroll.targets = { snapTargets() }
         grid = Grid(this, rtl())
         scroll.addView(grid, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
         root.addView(scroll, FrameLayout.LayoutParams(-1, -1))
@@ -122,6 +125,13 @@ class RecentsActivity : Activity() {
             it.text = memoryText()
         }
         root.addView(memory, FrameLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM).also { it.bottomMargin = dp(20) })
+        splitHint = TextView(this).also {
+            it.setTextColor(Colors.text(this)); it.textSize = 16f; it.gravity = Gravity.CENTER; it.visibility = View.GONE
+            it.text = UiText.text(this, "Choose the second app for split screen")
+            it.setPadding(dp(22), dp(10), dp(22), dp(10))
+            it.background = GradientDrawable().apply { cornerRadius = dp(24).toFloat(); setColor(Colors.surfaceHigh(this@RecentsActivity)) }
+        }
+        root.addView(splitHint, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL).also { it.topMargin = dp(12) })
         setContentView(root)
         tasks = Recents.load(this)
     }
@@ -221,6 +231,12 @@ class RecentsActivity : Activity() {
     private fun lp(w: Int, h: Int, mh: Int, mv: Int) = LinearLayout.LayoutParams(w, h).also { it.setMargins(mh, mv, mh, mv); it.gravity = Gravity.CENTER_VERTICAL }
 
     private fun open(t: RTask) {
+        val first = splitFirst
+        if (first != null) {   // the second app of a split
+            splitFirst = null; splitHint.visibility = View.GONE
+            if (t !== first) { com.android.desktoplauncher.SysUi.splitTasks(first.id, t.id); leave() } else cards.forEach { it.animate().alpha(1f).start() }
+            return
+        }
         Recents.open(this, t)
         val c = cards.firstOrNull { it.task === t }
         if (c == null || c.width == 0 || leaving) { leave(); return }
@@ -247,7 +263,7 @@ class RecentsActivity : Activity() {
     /** Right-click / long-press on the icon: App info directly, or a small menu when freeform windows are on. */
     private fun showMenu(anchor: View, t: RTask) {
         val freeform = Prefs.bool(this, Prefs.K_FREEFORM, false)
-        if (!freeform) { appInfo(t); return }
+        val pinning = try { android.provider.Settings.System.getInt(contentResolver, "lock_to_app_enabled", 0) == 1 } catch (_: Throwable) { false }
         menu?.dismiss()
         val box = LinearLayout(this).also {
             it.orientation = LinearLayout.VERTICAL
@@ -263,6 +279,15 @@ class RecentsActivity : Activity() {
             }, LinearLayout.LayoutParams(-2, -2))
         }
         item(UiText.text(this, "App info")) { appInfo(t) }
+        item(UiText.text(this, "Close")) { cards.firstOrNull { it.task === t }?.let { dismiss(it) } }
+        if (com.android.desktoplauncher.SysUi.splitAvailable && cards.size > 1) item(UiText.text(this, "Split screen")) {
+            splitFirst = t; splitHint.visibility = View.VISIBLE
+            cards.forEach { if (it.task === t) it.animate().alpha(0.45f).start() }
+        }
+        if (pinning) item(UiText.text(this, "Pin")) {
+            Thread { SysTasks.pin(t.id) }.start()
+            main.postDelayed({ leave() }, 150)
+        }
         if (freeform) item(UiText.text(this, "Freeform window")) {
             Thread { SysTasks.setMode(t.id, 5) }.start()
             main.postDelayed({ open(t) }, 250)
@@ -318,7 +343,8 @@ class RecentsActivity : Activity() {
 
     override fun onKeyDown(code: Int, e: KeyEvent): Boolean {
         when (code) {
-            KeyEvent.KEYCODE_ESCAPE -> { leave(); return true }
+            KeyEvent.KEYCODE_ESCAPE -> { if (splitFirst != null) { splitFirst = null; splitHint.visibility = View.GONE; cards.forEach { it.animate().alpha(1f).start() } } else leave(); return true }
+            KeyEvent.KEYCODE_DEL, KeyEvent.KEYCODE_FORWARD_DEL -> { (selCard ?: cards.firstOrNull())?.let { dismiss(it) }; return true }   // Delete closes the marked card
             KeyEvent.KEYCODE_DPAD_LEFT -> { moveSel(-1, 0); return true }
             KeyEvent.KEYCODE_DPAD_RIGHT -> { moveSel(1, 0); return true }
             KeyEvent.KEYCODE_DPAD_UP -> { moveSel(0, -1); return true }
@@ -327,6 +353,15 @@ class RecentsActivity : Activity() {
             KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> { (selCard ?: cards.firstOrNull())?.let { open(it.task) }; return true }
         }
         return super.onKeyDown(code, e)
+    }
+
+    /** Where the row comes to rest after a scroll, as the stock overview snaps to its pages: the focus card centred, grid columns at the side margin. */
+    private fun snapTargets(): IntArray {
+        val max = Math.max(0, grid.width - vw)
+        val l = ArrayList<Int>()
+        cards.forEachIndexed { i, c -> l.add((if (i == 0) c.left + c.width / 2 - vw / 2 else c.left - dp(64)).coerceIn(0, max)) }
+        l.add(0); l.add(max)
+        return l.toIntArray()
     }
 
     private var selIdx = 0
@@ -385,12 +420,28 @@ private class HScroll(c: Context, val onEmptyTap: () -> Unit) : HorizontalScroll
     private val slop = ViewConfiguration.get(c).scaledTouchSlop
     private var downX = 0f; private var downY = 0f
 
+    var targets: (() -> IntArray)? = null
+    private var touching = false
+    private val settle = Runnable {
+        val t = targets?.invoke() ?: return@Runnable
+        if (touching || t.isEmpty()) return@Runnable
+        val best = t.minByOrNull { Math.abs(it - scrollX) } ?: return@Runnable
+        if (Math.abs(best - scrollX) > 3) smoothScrollTo(best, 0)
+    }
+
     init { isHorizontalScrollBarEnabled = false; overScrollMode = OVER_SCROLL_NEVER }
+
+    override fun onScrollChanged(l: Int, t: Int, oldl: Int, oldt: Int) {
+        super.onScrollChanged(l, t, oldl, oldt)
+        removeCallbacks(settle)
+        if (!touching) postDelayed(settle, 110)
+    }
 
     override fun onTouchEvent(ev: MotionEvent): Boolean {
         when (ev.actionMasked) {
-            MotionEvent.ACTION_DOWN -> { downX = ev.x; downY = ev.y }
-            MotionEvent.ACTION_UP -> if (Math.abs(ev.x - downX) < slop && Math.abs(ev.y - downY) < slop) onEmptyTap()
+            MotionEvent.ACTION_DOWN -> { downX = ev.x; downY = ev.y; touching = true; removeCallbacks(settle) }
+            MotionEvent.ACTION_CANCEL -> { touching = false; postDelayed(settle, 110) }
+            MotionEvent.ACTION_UP -> { touching = false; postDelayed(settle, 110); if (Math.abs(ev.x - downX) < slop && Math.abs(ev.y - downY) < slop) onEmptyTap() }
         }
         return super.onTouchEvent(ev)
     }
