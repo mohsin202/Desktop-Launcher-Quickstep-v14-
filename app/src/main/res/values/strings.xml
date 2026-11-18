@@ -1,4 +1,3 @@
 <resources>
     <string name="app_name">Desktop Launcher Quickstep</string>
-    <string name="accessibility_description">Shows the Desktop Launcher taskbar over all apps and provides the Back, Home and Recents buttons.</string>
 </resources>
