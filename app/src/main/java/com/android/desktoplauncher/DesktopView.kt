@@ -91,6 +91,28 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
                 }
             }
             val ls = event.localState
+            if (ls is Entry.FileE && ls === sysEntry) {
+                return@setOnDragListener when (event.action) {
+                    android.view.DragEvent.ACTION_DRAG_LOCATION -> { edgeHover(event.x); showHover(event.x, event.y, ls); true }
+                    android.view.DragEvent.ACTION_DRAG_EXITED -> { edgeStop(); showHover(-1f, -1f, null); true }
+                    android.view.DragEvent.ACTION_DROP -> {
+                        edgeStop(); showHover(-1f, -1f, null)
+                        val v = sysView
+                        if (v != null && !sysFlipped && v.isAttachedToWindow) {
+                            val loc = IntArray(2); getLocationOnScreen(loc)
+                            dropItem(ls, v, event.x - (sysX0 - loc[0]), event.y - (sysY0 - loc[1]))
+                        } else if (placeAt(ls.key, event.x, event.y, ls)) reload() else rebuild()
+                        true
+                    }
+                    android.view.DragEvent.ACTION_DRAG_ENDED -> {
+                        edgeStop(); showHover(-1f, -1f, null)
+                        sysEntry = null; sysView = null; dragLock = false
+                        if (!event.result) rebuild()
+                        true
+                    }
+                    else -> true
+                }
+            }
             if (ls is WidgetDrag) {
                 return@setOnDragListener when (event.action) {
                     android.view.DragEvent.ACTION_DROP -> {
@@ -181,7 +203,8 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
         if (stepTarget(ld) == null) return
         val de = dragEntry; val dv = dragView
         if (carry == null && de != null && dv != null) beginCarry(de, dv)
-        if (carry != null || extDrag) {
+        if (carry != null || extDrag || sysEntry != null) {
+            sysFlipped = true
             step(ld)
             postDelayed(edgeFlip, 750)
         }
@@ -192,6 +215,35 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
         dragEntry = e; dragView = v
         val loc = IntArray(2); getLocationOnScreen(loc)
         edgeHover(rawX - loc[0])
+    }
+
+    // A file icon dragged with the mouse is a system drag (global, with the file as a content URI), so it can also be
+    // dropped on other windows such as the file manager.
+    private var sysEntry: Entry.FileE? = null
+    private var sysView: View? = null
+    private var sysFlipped = false
+    private var sysX0 = 0f
+    private var sysY0 = 0f
+
+    private fun startFileDrag(e: Entry.FileE, v: View, rawX: Float, rawY: Float): Boolean {
+        if (!e.file.isFile || v.width <= 0 || v.height <= 0) return false
+        val bmp = android.graphics.Bitmap.createBitmap(v.width, v.height, android.graphics.Bitmap.Config.ARGB_8888)
+        val tx = v.translationX; val ty = v.translationY
+        v.translationX = 0f; v.translationY = 0f
+        v.draw(android.graphics.Canvas(bmp))
+        val w = v.width; val h = v.height
+        val shadow = object : View.DragShadowBuilder(v) {
+            override fun onProvideShadowMetrics(size: android.graphics.Point, touch: android.graphics.Point) { size.set(w, h); touch.set(w / 2, h / 2) }
+            override fun onDrawShadow(canvas: android.graphics.Canvas) { canvas.drawBitmap(bmp, 0f, 0f, null) }
+        }
+        val desc = android.content.ClipDescription("desk-self", arrayOf(Files.mime(e.file)))
+        val clip = android.content.ClipData(desc, android.content.ClipData.Item(Files.uri(e.file)))
+        sysEntry = e; sysView = v; sysFlipped = false; sysX0 = rawX; sysY0 = rawY
+        val ok = try {
+            v.startDragAndDrop(clip, shadow, e, View.DRAG_FLAG_GLOBAL or View.DRAG_FLAG_GLOBAL_URI_READ)
+        } catch (_: Exception) { false }
+        if (!ok) { sysEntry = null; sysView = null; v.translationX = tx; v.translationY = ty }
+        return ok
     }
 
     private fun endTrack() { dragEntry = null; dragView = null; if (carry == null) edgeStop() }
@@ -1633,6 +1685,7 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
                     }
                     if (state == 2) {
                         if (far) moved = true
+                        if (mouse && e is Entry.FileE && far && sysEntry == null && startFileDrag(e, v, x0, y0)) return true
                         v.translationX = dx; v.translationY = dy
                         trackEdge(e, v, ev.rawX)
                     }
@@ -1663,7 +1716,7 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
                     return true
                 }
                 MotionEvent.ACTION_CANCEL -> {
-                    if (carry == null) dragLock = false
+                    if (carry == null && sysEntry == null) dragLock = false
                     endTrack()
                     v.removeCallbacks(longPress)
                     if (fResize && e is Entry.FolderE) { fResize = false; FolderStore.update(context, e.id) { it.sx = e.sx; it.sy = e.sy } }

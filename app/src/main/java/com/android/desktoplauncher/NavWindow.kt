@@ -13,7 +13,7 @@ import android.view.WindowManager
  *
  * These are hidden platform APIs (not in the public SDK), so they are reached by reflection, and the window type /
  * providedInsets need signature permissions (INTERNAL_SYSTEM_WINDOW, STATUS_BAR_SERVICE). Every call is wrapped: when the
- * system refuses, the caller falls back to the plain accessibility overlay and the bar still works, only without reserving space.
+ * system refuses, the caller falls back to a plain overlay and the bar still works, only without reserving space.
  */
 object NavWindow {
     private const val TAG = "DesktopQuickstep"

@@ -63,7 +63,15 @@ object DeskDrag {
             override fun onDrawShadow(canvas: Canvas) { canvas.drawBitmap(bmp, 0f, 0f, null) }
         }
         return try {
-            v.startDragAndDrop(ClipData.newPlainText(LABEL, p.kind + "|" + p.value), shadow, null, View.DRAG_FLAG_GLOBAL)
+            val clip = ClipData.newPlainText(LABEL, p.kind + "|" + p.value)
+            var flags = View.DRAG_FLAG_GLOBAL
+            val f = if (p.kind == FILE) File(p.value) else null
+            if (f != null && f.isFile) {
+                // other apps (a file manager) get the file itself through our read-only provider
+                clip.addItem(ClipData.Item(Files.uri(f)))
+                flags = flags or View.DRAG_FLAG_GLOBAL_URI_READ
+            }
+            v.startDragAndDrop(clip, shadow, null, flags)
         } catch (_: Exception) { false }
     }
 

@@ -65,6 +65,27 @@ object SysUi {
     }
 
     fun back() = call("onBackPressed") { it.onBackPressed() }
+
+    // --- Split screen: the shell's ISplitScreen binder, which SystemUI hands over in onInitialize. Called by hand (a parcel) so no
+    // copy of the system's AIDL is needed; the transaction numbers are those of LineageOS 21 (ISplitScreen.aidl, startTasks = 10).
+    @Volatile var splitBinder: android.os.IBinder? = null; internal set
+    val splitAvailable get() = splitBinder != null
+    /** Two running tasks side by side (first on the left/top), 50:50, with the system's own transition. */
+    fun splitTasks(taskId1: Int, taskId2: Int): Boolean {
+        val b = splitBinder ?: return false
+        val data = android.os.Parcel.obtain()
+        return try {
+            data.writeInterfaceToken("com.android.wm.shell.splitscreen.ISplitScreen")
+            data.writeInt(taskId1); data.writeTypedObject(android.os.Bundle(), 0)
+            data.writeInt(taskId2); data.writeTypedObject(android.os.Bundle(), 0)
+            data.writeInt(0)        // split position: the first task on the left / top
+            data.writeInt(1)        // snap: 50:50
+            data.writeInt(0)        // no remote transition (null)
+            data.writeInt(1); data.writeInt(4242)   // an InstanceId for the shell's log
+            b.transact(android.os.IBinder.FIRST_CALL_TRANSACTION + 10, data, null, android.os.IBinder.FLAG_ONEWAY)
+            true
+        } catch (t: Throwable) { Log.w("DesktopTaskbar", "split: $t"); false } finally { data.recycle() }
+    }
     fun expandNotifications() = call("expandNotificationPanel") { it.expandNotificationPanel() }
     fun toggleNotifications() = call("toggleNotificationPanel") { it.toggleNotificationPanel() }
     fun startScreenPinning(taskId: Int) = call("startScreenPinning") { it.startScreenPinning(taskId) }
@@ -91,6 +112,7 @@ class TouchInteractionService : Service() {
         override fun onInitialize(params: Bundle?) {
             val b = params?.getBinder(KEY_SYSUI_PROXY)
             SysUi.set(if (b != null) ISystemUiProxy.Stub.asInterface(b) else null)
+            SysUi.splitBinder = params?.getBinder("extra_shell_split_screen")
             Log.i(TAG, "SystemUI connected, proxy=${b != null}")
             // tell SystemUI the taskbar is the navigation bar (it then draws none of its own and keeps the back gesture)
             mainH.post { (TaskbarCore.instance ?: TaskbarCore.ensure(applicationContext))?.onSysUiConnected() }
@@ -119,7 +141,7 @@ class TouchInteractionService : Service() {
         super.onCreate()
         // SystemUI binds this service at boot: a good moment to switch the taskbar on, without anyone opening Settings
         startTaskbar()
-        AutoStart.ensureTaskbarService(this)
+        TaskbarCore.ensure(this)
         registerAllApps()
     }
 

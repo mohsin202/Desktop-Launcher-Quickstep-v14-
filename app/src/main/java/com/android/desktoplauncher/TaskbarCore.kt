@@ -1,6 +1,5 @@
 package com.android.desktoplauncher
 
-import android.accessibilityservice.AccessibilityService
 import android.content.ComponentName
 import android.content.Context
 import android.content.ContextWrapper
@@ -15,7 +14,6 @@ import android.content.res.ColorStateList
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
-import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -29,7 +27,7 @@ import android.os.SystemClock
 import android.os.Looper
 
 /**
- * Draws the desktop taskbar in an accessibility overlay window. The overlay is shown over every app,
+ * Draws the desktop taskbar in a navigation-bar window. The window is shown over every app,
  * including fullscreen/immersive ones, and sits in the navigation bar area at the bottom.
  */
 interface TaskbarHost {
@@ -55,9 +53,7 @@ interface TaskbarHost {
 }
 
 /**
- * The taskbar itself. It no longer lives in an accessibility service: TouchInteractionService (bound by SystemUI at boot)
- * starts it, so it runs without anything being switched on in Settings > Accessibility. The accessibility service
- * is not used at all any more.
+ * The taskbar itself. TouchInteractionService (bound by SystemUI at boot) starts it; no accessibility service is involved.
  */
 class TaskbarCore private constructor(base: Context) : ContextWrapper(base), TaskbarHost {
     companion object {
@@ -75,7 +71,7 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
     }
 
     private fun overlayType(): Int = NavWindow.TYPE
-    private val windows: List<AccessibilityWindowInfo> get() = emptyList()   // no accessibility service: no window list
+    private val windows: List<AccessibilityWindowInfo> get() = emptyList()   // no window list without an accessibility service
     private val wm: WindowManager get() = (baseContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager)
     private lateinit var uctx: Context
     private var bar: TaskbarView? = null
@@ -346,7 +342,7 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
     fun stop() {
         SysUi.listeners.remove(shadeListener)
         stopSampler()
-        edge?.stop()
+        edgeHover?.stop()
         try { baseContext.unregisterComponentCallbacks(configCb) } catch (_: Throwable) {}
         handler.removeCallbacks(pruneTick)
         try { contentResolver.unregisterContentObserver(navObserver) } catch (_: Throwable) {}
@@ -428,7 +424,6 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
         if (ime != imeShown) { imeShown = ime; changed = true }
         if (changed) bar?.refresh()
         navWin = detectNavWin()
-        // Accessibility events also arrive when the keyguard is shown/hidden.
         sync(false)
     }
 
@@ -458,25 +453,25 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
     override fun hideRunning(pkg: String) { running.remove(pkg); dismissed.add(pkg); bar?.refresh() }
     override fun closeApp(pkg: String) { Thread { SysTasks.removeApp(this, pkg); handler.post { running.remove(pkg); bar?.refresh() } }.start() }
     override fun canClose(): Boolean = SysTasks.trusted(this)
-    /** Actions of the old accessibility service, done without it where the system lets an app do so. */
+    /** The system actions the taskbar buttons and gestures ask for, done without any service where the system lets an app do so. */
     private fun a11yAction(a: Int) {
         when (a) {
-            AccessibilityService.GLOBAL_ACTION_BACK -> SysUi.back()
-            AccessibilityService.GLOBAL_ACTION_HOME ->
+            GlobalAct.BACK -> SysUi.back()
+            GlobalAct.HOME ->
                 try { startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (_: Exception) {}
-            AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS, AccessibilityService.GLOBAL_ACTION_QUICK_SETTINGS -> SysUi.toggleNotifications()
-            AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN -> try {
+            GlobalAct.NOTIFICATIONS, GlobalAct.QUICK_SETTINGS -> SysUi.toggleNotifications()
+            GlobalAct.LOCK_SCREEN -> try {
                 val pm = getSystemService(android.os.PowerManager::class.java)
                 pm.javaClass.getMethod("goToSleep", Long::class.javaPrimitiveType).invoke(pm, SystemClock.uptimeMillis())
             } catch (_: Throwable) {}
-            else -> {}   // split screen, screenshot, power menu: only an accessibility service can do these
+            else -> {}   // screenshot, power menu: not possible for an app without a service
         }
     }
     override fun global(action: Int) {
         // Back goes through SystemUI's own proxy when connected: exactly what the stock navigation bar does
-        if (action == AccessibilityService.GLOBAL_ACTION_BACK && SysUi.back()) return
+        if (action == GlobalAct.BACK && SysUi.back()) return
         // Recents: our own Overview screen (same one SystemUI opens through TouchInteractionService)
-        if (action == AccessibilityService.GLOBAL_ACTION_RECENTS) { com.android.quickstep.RecentsActivity.toggle(this); return }
+        if (action == GlobalAct.RECENTS) { com.android.quickstep.RecentsActivity.toggle(this); return }
         a11yAction(action)
     }
 
@@ -485,15 +480,15 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
         try {
             when (Prefs.getInt(this, key, if (kind == 1) NavActions.ASSIST else NavActions.NONE)) {
                 NavActions.ASSIST -> startActivity(Intent(Intent.ACTION_ASSIST).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                NavActions.SPLIT -> a11yAction(AccessibilityService.GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN)
-                NavActions.SHOT -> a11yAction(AccessibilityService.GLOBAL_ACTION_TAKE_SCREENSHOT)
-                NavActions.LOCK -> a11yAction(AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN)
-                NavActions.POWER -> a11yAction(AccessibilityService.GLOBAL_ACTION_POWER_DIALOG)
-                NavActions.NOTIF -> a11yAction(AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS)
-                NavActions.QS -> a11yAction(AccessibilityService.GLOBAL_ACTION_QUICK_SETTINGS)
+                NavActions.SPLIT -> a11yAction(GlobalAct.TOGGLE_SPLIT_SCREEN)
+                NavActions.SHOT -> a11yAction(GlobalAct.TAKE_SCREENSHOT)
+                NavActions.LOCK -> a11yAction(GlobalAct.LOCK_SCREEN)
+                NavActions.POWER -> a11yAction(GlobalAct.POWER_DIALOG)
+                NavActions.NOTIF -> a11yAction(GlobalAct.NOTIFICATIONS)
+                NavActions.QS -> a11yAction(GlobalAct.QUICK_SETTINGS)
                 NavActions.DRAWER -> toggleDrawer()
-                NavActions.BACK -> a11yAction(AccessibilityService.GLOBAL_ACTION_BACK)
-                NavActions.HOME -> a11yAction(AccessibilityService.GLOBAL_ACTION_HOME)
+                NavActions.BACK -> a11yAction(GlobalAct.BACK)
+                NavActions.HOME -> a11yAction(GlobalAct.HOME)
                 NavActions.RECENTS -> com.android.quickstep.RecentsActivity.toggle(this)
             }
         } catch (e: Exception) { Log.e("DesktopTaskbar", "Long-press action failed", e) }
@@ -509,16 +504,18 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
     }
 
     /** Re-reads preferences: adds/removes the bar and updates its size. */
-    private var edge: EdgeGestures? = null
-    /** Edge back gesture: only in gesture navigation and when switched on. */
-    private fun updateEdge() {
-        val want = NavMode.gesture(this) && Prefs.bool(this, Prefs.K_EDGE_BACK, true)
-        if (want) { val e = edge ?: EdgeGestures(this) { SysUi.back() }.also { edge = it }; e.start() }
-        else edge?.stop()
+    private var edgeHover: EdgeHover? = null
+    /** Gesture navigation with the hidden taskbar: the mouse resting on the bottom edge brings the taskbar up, also over full-screen apps. */
+    private fun updateEdgeHover() {
+        val want = NavMode.gesture(this) && autoHide()
+        if (want) {
+            val e = edgeHover ?: EdgeHover(this) { if (collapsedNow() && !expanded && !inRecents) expandBar(true) }.also { edgeHover = it }
+            e.start()
+        } else edgeHover?.stop()
     }
 
     private fun sync(refresh: Boolean = true) {
-        updateEdge()
+        updateEdgeHover()
         try {
             val keyguardLocked = try { getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == true } catch (_: Exception) { false }
             if (keyguardLocked) {
@@ -649,7 +646,7 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
                 return lp
             }
             // First the real navigation-bar window (reserves space, like the stock taskbar). If the system refuses it
-            // (missing signature permissions) the bar is added as the old accessibility overlay instead.
+            // (missing signature permissions) the bar is added as a plain overlay instead.
             var done = false
             if (!NavWindow.refused) {
                 try { wm.addView(v, params(true)); done = true; navMode = true }
@@ -1004,13 +1001,13 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
                 if (collapsed) {
                     // thin strip: a light swipe shows the taskbar; a long slow one = Recents; a long fast one = Home
                     performHapticFeedback(android.view.HapticFeedbackConstants.GESTURE_END)
-                    if (dist >= ctx.dp(110) && speed < 600f) svc.global(AccessibilityService.GLOBAL_ACTION_RECENTS)
-                    else if (dist >= ctx.dp(80) && speed >= 800f) svc.global(AccessibilityService.GLOBAL_ACTION_HOME)
+                    if (dist >= ctx.dp(110) && speed < 600f) svc.global(GlobalAct.RECENTS)
+                    else if (dist >= ctx.dp(80) && speed >= 800f) svc.global(GlobalAct.HOME)
                     else svc.expandBar()
                 } else if (dist >= ctx.dp(24)) {
                     performHapticFeedback(android.view.HapticFeedbackConstants.GESTURE_END)
-                    if (dist >= ctx.dp(110) && speed < 600f) svc.global(AccessibilityService.GLOBAL_ACTION_RECENTS)
-                    else svc.global(AccessibilityService.GLOBAL_ACTION_HOME)
+                    if (dist >= ctx.dp(110) && speed < 600f) svc.global(GlobalAct.RECENTS)
+                    else svc.global(GlobalAct.HOME)
                 }
             }
         }
@@ -1131,15 +1128,15 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
         }
         if (navButtons()) {
             right.addView(NavButton(ctx, 0).also { b ->
-                b.background = ripple(); b.setOnClickListener { svc.global(AccessibilityService.GLOBAL_ACTION_BACK) }
+                b.background = ripple(); b.setOnClickListener { svc.global(GlobalAct.BACK) }
                 b.setOnLongClickListener { it.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS); svc.navLong(0); true }
             }, LinearLayout.LayoutParams(cell, MATCH))
             right.addView(NavButton(ctx, 1).also { b ->
-                b.background = ripple(); b.setOnClickListener { svc.global(AccessibilityService.GLOBAL_ACTION_HOME) }
+                b.background = ripple(); b.setOnClickListener { svc.global(GlobalAct.HOME) }
                 b.setOnLongClickListener { it.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS); svc.navLong(1); true }
             }, LinearLayout.LayoutParams(cell, MATCH))
             right.addView(NavButton(ctx, 2).also { b ->
-                b.background = ripple(); b.setOnClickListener { svc.global(AccessibilityService.GLOBAL_ACTION_RECENTS) }
+                b.background = ripple(); b.setOnClickListener { svc.global(GlobalAct.RECENTS) }
                 b.setOnLongClickListener { it.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS); svc.navLong(2); true }
             }, LinearLayout.LayoutParams(cell, MATCH))
         }
@@ -1415,4 +1412,17 @@ class SearchButton(c: Context) : View(c) {
         canvas.drawCircle(cx, cy, r, p)
         canvas.drawLine(cx + r * 0.72f, cy + r * 0.72f, cx + r * 1.55f, cy + r * 1.55f, p)
     }
+}
+
+/** The ids of the system actions (same numbers as the accessibility framework uses for them). */
+object GlobalAct {
+    const val BACK = 1
+    const val HOME = 2
+    const val RECENTS = 3
+    const val NOTIFICATIONS = 4
+    const val QUICK_SETTINGS = 5
+    const val POWER_DIALOG = 6
+    const val TOGGLE_SPLIT_SCREEN = 7
+    const val LOCK_SCREEN = 8
+    const val TAKE_SCREENSHOT = 9
 }
