@@ -226,7 +226,8 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
     private var sysY0 = 0f
 
     private fun startFileDrag(e: Entry.FileE, v: View, rawX: Float, rawY: Float): Boolean {
-        if (!e.file.isFile || v.width <= 0 || v.height <= 0) return false
+        if (!e.file.isFile) { context.toast("Drag out: not a plain file (" + e.file.name + ")"); return false }
+        if (v.width <= 0 || v.height <= 0) { context.toast("Drag out: icon has no size"); return false }
         val bmp = android.graphics.Bitmap.createBitmap(v.width, v.height, android.graphics.Bitmap.Config.ARGB_8888)
         val tx = v.translationX; val ty = v.translationY
         v.translationX = 0f; v.translationY = 0f
@@ -1629,6 +1630,7 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
         private var secondary = false
         private var fResize = false
         private var blockLong = false
+        private var sysTried = false
         private var sSx = 1
         private var sSy = 1
         private val slop = android.view.ViewConfiguration.get(context).scaledTouchSlop
@@ -1658,7 +1660,7 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
                         !(ev.x >= z && ev.x <= v.width - z && ev.y >= z && ev.y <= v.height - z)
                     }
                     if (blockLong) { dragLock = true; state = 0; parent?.requestDisallowInterceptTouchEvent(true); return true }
-                    x0 = ev.rawX; y0 = ev.rawY; moved = false; state = 1
+                    x0 = ev.rawX; y0 = ev.rawY; moved = false; state = 1; sysTried = false
                     lastX = ev.rawX.toInt(); lastY = ev.rawY.toInt()
                     if (!mouse) v.postDelayed(longPress, android.view.ViewConfiguration.getLongPressTimeout().toLong())
                     parent?.requestDisallowInterceptTouchEvent(true)
@@ -1685,7 +1687,10 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
                     }
                     if (state == 2) {
                         if (far) moved = true
-                        if (mouse && e is Entry.FileE && far && sysEntry == null && startFileDrag(e, v, x0, y0)) return true
+                        if (e is Entry.FileE && far && sysEntry == null && !sysTried) {
+                            sysTried = true
+                            if (startFileDrag(e, v, x0, y0)) return true
+                        }
                         v.translationX = dx; v.translationY = dy
                         trackEdge(e, v, ev.rawX)
                     }
