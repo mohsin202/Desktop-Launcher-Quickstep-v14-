@@ -38,7 +38,7 @@
          /system_ext/etc/permissions/com.android.launcher3.xml (see rom/com.android.launcher3.xml). -->
     <uses-permission android:name="android.permission.STATUS_BAR" tools:ignore="ProtectedPermissions" />
     <!-- Signature permissions: needed for the navigation-bar window (TYPE_NAVIGATION_BAR_PANEL + provided insets). Without them
-         the taskbar falls back to the accessibility overlay automatically. -->
+         the taskbar falls back to a plain overlay automatically. -->
     <uses-permission android:name="android.permission.INTERNAL_SYSTEM_WINDOW" tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.STATUS_BAR_SERVICE" tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.STOP_APP_SWITCHES" tools:ignore="ProtectedPermissions" />
