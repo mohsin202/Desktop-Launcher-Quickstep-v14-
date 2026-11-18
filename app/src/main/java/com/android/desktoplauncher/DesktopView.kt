@@ -241,8 +241,8 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
         sysEntry = e; sysView = v; sysFlipped = false; sysX0 = rawX; sysY0 = rawY
         val ok = try {
             v.startDragAndDrop(clip, shadow, e, View.DRAG_FLAG_GLOBAL or View.DRAG_FLAG_GLOBAL_URI_READ)
-        } catch (_: Exception) { false }
-        if (!ok) { sysEntry = null; sysView = null; v.translationX = tx; v.translationY = ty }
+        } catch (t: Throwable) { context.toast("Drag out failed: " + t.javaClass.simpleName + " " + (t.message ?: "")); false }
+        if (!ok) { sysEntry = null; sysView = null; v.translationX = tx; v.translationY = ty; context.toast("Drag out refused by the system") }
         return ok
     }
 
