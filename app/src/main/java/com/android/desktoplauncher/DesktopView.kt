@@ -83,7 +83,7 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
         setOnLongClickListener { desktopMenu(lastX, lastY); true }
         setSecondaryClick { x, y -> desktopMenu(x, y) }
         setOnDragListener { _, event ->
-            if (DeskDrag.ours(event.clipDescription) || (event.action == android.view.DragEvent.ACTION_DRAG_ENDED && extDrag)) {
+            if (!(sysEntry != null && event.localState === sysEntry) && (DeskDrag.ours(event.clipDescription) || (event.action == android.view.DragEvent.ACTION_DRAG_ENDED && extDrag))) {
                 return@setOnDragListener when (event.action) {
                     android.view.DragEvent.ACTION_DRAG_STARTED -> { extDrag = true; true }
                     android.view.DragEvent.ACTION_DRAG_LOCATION -> { edgeHover(event.x); showHover(event.x, event.y, null); true }
@@ -247,8 +247,10 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
             override fun onProvideShadowMetrics(size: android.graphics.Point, touch: android.graphics.Point) { size.set(w, h); touch.set(w / 2, h / 2) }
             override fun onDrawShadow(canvas: android.graphics.Canvas) { canvas.drawBitmap(bmp, 0f, 0f, null) }
         }
-        val desc = android.content.ClipDescription("desk-self", arrayOf(Files.mime(e.file)))
-        val clip = android.content.ClipData(desc, android.content.ClipData.Item(Files.uri(e.file)))
+        // Same format as the drawer drags and the Files app ("desk-drag", first item "file|<path>"), plus the file as a content URI
+        // for apps that take URIs.
+        val clip = android.content.ClipData.newPlainText(DeskDrag.LABEL, DeskDrag.FILE + "|" + e.file.absolutePath)
+        clip.addItem(android.content.ClipData.Item(Files.uri(e.file)))
         sysEntry = e; sysView = v; sysFlipped = false; sysX0 = rawX; sysY0 = rawY
         val ok = try {
             v.startDragAndDrop(clip, shadow, e, View.DRAG_FLAG_GLOBAL or View.DRAG_FLAG_GLOBAL_URI_READ)
