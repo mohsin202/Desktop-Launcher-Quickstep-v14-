@@ -47,6 +47,8 @@ interface TaskbarHost {
     /** Gesture navigation: the hidden (transient) taskbar. */
     fun expandBar(hover: Boolean = false) {}
     fun barHover(inside: Boolean) {}
+    /** The mouse is on / left the bar that the mouse brought up over a full-screen app. */
+    fun revealHover(inside: Boolean) {}
     fun barTouched() {}
     fun barOutside() {}
     fun appLaunched() {}
@@ -507,9 +509,17 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
     private var edgeHover: EdgeHover? = null
     /** The mouse brought the bar up over a full-screen app: it stays visible even though the system bars are hidden. */
     @Volatile private var edgeReveal = false
+    private val revealHide = Runnable {
+        if (edgeReveal && drawer == null) { edgeReveal = false; navWin = false; sync(false) }
+    }
+    override fun revealHover(inside: Boolean) {
+        if (!edgeReveal) return
+        handler.removeCallbacks(revealHide)
+        if (!inside) handler.postDelayed(revealHide, 1200)
+    }
     /** Gesture navigation with the hidden taskbar: the mouse resting on the bottom edge brings the taskbar up, also over full-screen apps. */
     private fun updateEdgeHover() {
-        val want = NavMode.gesture(this) && autoHide()
+        val want = true
         if (want) {
             val e = edgeHover ?: EdgeHover(this) {
                 if (collapsedNow() && !expanded && !inRecents) {
@@ -517,6 +527,11 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
                     edgeReveal = true; navWin = true
                     expandBar(true)
                     setBarShown(true)
+                } else if (!barShown && bar != null) {
+                    // three buttons / bar always on: hidden because an app is full-screen. Show it while the mouse is on it.
+                    edgeReveal = true; navWin = true
+                    setBarShown(true)
+                    handler.removeCallbacks(revealHide); handler.postDelayed(revealHide, 3000)
                 }
             }.also { edgeHover = it }
             e.start()
@@ -863,6 +878,10 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
     }
 
     override fun dispatchHoverEvent(ev: android.view.MotionEvent): Boolean {
+        if (showNav) when (ev.actionMasked) {
+            android.view.MotionEvent.ACTION_HOVER_ENTER, android.view.MotionEvent.ACTION_HOVER_MOVE -> svc.revealHover(true)
+            android.view.MotionEvent.ACTION_HOVER_EXIT -> svc.revealHover(false)
+        }
         if (showNav && NavMode.gesture(ctx)) {
             when (ev.actionMasked) {
                 android.view.MotionEvent.ACTION_HOVER_ENTER, android.view.MotionEvent.ACTION_HOVER_MOVE -> {
