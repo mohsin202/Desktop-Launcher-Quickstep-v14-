@@ -115,12 +115,12 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
      */
     private fun winThick(side: Int = barSide): Int = when {
         collapsedNow() -> stripPx()
-        side == 0 && floatingNow() -> uctx.dp(Prefs.tbDp(this)) + uctx.dp(12) * (if (autoHide()) 1 else 2)
+        side == 0 && floatingNow() -> uctx.dp(Prefs.tbDp(this)) + uctx.dp(PILL_GAP_DP) * (if (autoHide()) 1 else 2)
         else -> uctx.dp(Prefs.tbDp(this))
     }
     /** Space reserved for apps: in gesture mode only the strip, the shown taskbar floats over the app. */
     private fun insetThick() = if (autoHide()) stripPx()
-        else if (floatingNow()) uctx.dp(Prefs.tbDp(this)) + 2 * uctx.dp(12)   // equal gap above and below the pill
+        else if (floatingNow()) uctx.dp(Prefs.tbDp(this)) + 2 * uctx.dp(PILL_GAP_DP)   // equal gap above and below the pill
         else uctx.dp(Prefs.tbDp(this))
 
     fun setExpanded(on: Boolean) {
@@ -130,7 +130,7 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
         if (on && drawer == null && !inRecents) handler.postDelayed(stashRun, 5000)
         if (expanded == on) return
         expanded = on
-        if (!on) hoverOpened = false
+        if (!on) { hoverOpened = false; if (edgeReveal) { edgeReveal = false; navWin = false; handler.post { sync(false) } } }
         applyWindow()
         scheduleSample()
     }
@@ -505,11 +505,20 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
 
     /** Re-reads preferences: adds/removes the bar and updates its size. */
     private var edgeHover: EdgeHover? = null
+    /** The mouse brought the bar up over a full-screen app: it stays visible even though the system bars are hidden. */
+    @Volatile private var edgeReveal = false
     /** Gesture navigation with the hidden taskbar: the mouse resting on the bottom edge brings the taskbar up, also over full-screen apps. */
     private fun updateEdgeHover() {
         val want = NavMode.gesture(this) && autoHide()
         if (want) {
-            val e = edgeHover ?: EdgeHover(this) { if (collapsedNow() && !expanded && !inRecents) expandBar(true) }.also { edgeHover = it }
+            val e = edgeHover ?: EdgeHover(this) {
+                if (collapsedNow() && !expanded && !inRecents) {
+                    // Over a full-screen app the system bars are hidden and so is our bar (setBarShown): show it by hand until it collapses again.
+                    edgeReveal = true; navWin = true
+                    expandBar(true)
+                    setBarShown(true)
+                }
+            }.also { edgeHover = it }
             e.start()
         } else edgeHover?.stop()
     }
@@ -586,20 +595,8 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
      */
     private var navWin = false
 
-    private fun detectNavWin(): Boolean = try {
-        val b = screenBounds()
-        val sw = b.width(); val sh = b.height()
-        val r = android.graphics.Rect()
-        windows.any { w ->
-            if (w.type != AccessibilityWindowInfo.TYPE_SYSTEM) return@any false
-            if (w.title?.toString() == "DesktopTaskbar") return@any false   // our own bar is a system-type window too
-            w.getBoundsInScreen(r)
-            if (r.left < 0 || r.top < 0 || r.right > sw || r.bottom > sh || r.isEmpty) return@any false
-            val bottomStrip = r.bottom >= sh - 2 && r.height() <= sh / 4 && r.width() >= sw / 2
-            val sideStrip = (r.left <= 2 || r.right >= sw - 2) && r.width() <= sw / 4 && r.height() >= sh / 2
-            bottomStrip || sideStrip
-        }
-    } catch (_: Exception) { false }
+    /** No accessibility window list any more: the bar is shown over full-screen apps when the mouse asked for it (EdgeHover). */
+    private fun detectNavWin(): Boolean = edgeReveal
 
     private fun statusTop(): Int = try {
         if (android.os.Build.VERSION.SDK_INT >= 30) wm.currentWindowMetrics.windowInsets.getInsets(android.view.WindowInsets.Type.statusBars()).top
@@ -699,7 +696,7 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
         val barH = if (bar != null && barSide == 0) winThick() else 0
         val barW = if (bar != null && barSide != 0) winThick() + gap else 0
         val screenH = screenBounds().height()
-        val d = DrawerView(uctx, uctx.dp(if (floatingNow() && barSide == 0 && !autoHide()) 0 else if (floatingNow()) 12 else 8), false, if (barW > 0) barSide else 0, floatingNow() && barW == 0) { closeDrawer() }
+        val d = DrawerView(uctx, uctx.dp(if (floatingNow() && barSide == 0 && !autoHide()) 0 else if (floatingNow() && barSide == 0) PILL_GAP_DP else if (floatingNow()) 12 else 8), false, if (barW > 0) barSide else 0, floatingNow() && barW == 0) { closeDrawer() }
         d.dragHook = { on ->
             // while an icon is carried, the drawer window lets touches / drops through to the desktop
             try {
@@ -892,7 +889,7 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
         if (floatingShape()) {
             lp.width = lenPx; lp.height = ctx.dp(Prefs.tbDp(ctx))
             lp.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-            lp.bottomMargin = ctx.dp(12)
+            lp.bottomMargin = ctx.dp(PILL_GAP_DP)
         } else {
             lp.width = MATCH; lp.height = MATCH; lp.gravity = Gravity.NO_GRAVITY; lp.bottomMargin = 0
         }
@@ -1426,3 +1423,6 @@ object GlobalAct {
     const val LOCK_SCREEN = 8
     const val TAKE_SCREENSHOT = 9
 }
+
+/** Free space above and below the floating pill (the pill itself is the taskbar height from the settings). */
+const val PILL_GAP_DP = 2

@@ -16,13 +16,19 @@ import android.view.MotionEvent
  * everywhere, also in full-screen apps where the strip window gets no hover). It only watches: events go on to the apps.
  */
 class EdgeHover(private val c: Context, private val onEdge: () -> Unit) {
-    companion object { @Volatile var status = "off" }
+    companion object {
+        @Volatile var status = "off"
+        @Volatile var info = ""
+    }
+    private var seen = 0; private var fired = 0
 
     private var thread: HandlerThread? = null
     private var monitor: Any? = null
     private var receiver: InputEventReceiver? = null
     private val main = Handler(Looper.getMainLooper())
-    private val fire = Runnable { onEdge() }
+    private val fire = Runnable { fired++; info = "mouse events $seen, last y ${lastY.toInt()} of $lastH, taskbar asked $fired x"; onEdge() }
+    @Volatile private var lastY = 0f
+    @Volatile private var lastH = 0
 
     fun start() {
         if (receiver != null) return
@@ -64,6 +70,8 @@ class EdgeHover(private val c: Context, private val onEdge: () -> Unit) {
         private fun handle(e: MotionEvent) {
             if (e.getToolType(0) != MotionEvent.TOOL_TYPE_MOUSE) return
             val h = c.resources.displayMetrics.heightPixels
+            seen++; lastY = e.y; lastH = h
+            if (seen % 40 == 1) info = "mouse events $seen, last y ${e.y.toInt()} of $h, taskbar asked $fired x"
             val atEdge = e.y >= h - 2
             if (atEdge && !armed) { armed = true; main.postDelayed(fire, 120) }
             else if (!atEdge && armed) { armed = false; main.removeCallbacks(fire) }
