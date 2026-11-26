@@ -175,12 +175,14 @@ class DrawerView(private val c: Context, private val bottomMargin: Int, private 
             else if (!hideKeyboardIfVisible()) onClose()
         }
         val dm = c.resources.displayMetrics
-        var pw = if (wide) dm.widthPixels - c.dp(16) else minOf(c.dp(440), dm.widthPixels - c.dp(16))
+        // landscape: wide enough for 6 icons in a row at first; portrait / phone: 440 dp
+        val landscapeNow = dm.widthPixels > dm.heightPixels
+        var pw = if (wide) dm.widthPixels - c.dp(16) else minOf(c.dp(if (landscapeNow) 600 else 440), dm.widthPixels - c.dp(16))
         var ph = if (wide) (dm.heightPixels * 0.86f).toInt() else minOf(c.dp(580), (dm.heightPixels * 0.78f).toInt())
         if (!wide) {
             // size the user chose last time
-            val sw = Prefs.getLong(c, "drawerWdp", 0L).toInt()
-            val sh = Prefs.getLong(c, "drawerHdp", 0L).toInt()
+            val sw = Prefs.getLong(c, "drawerW2dp", 0L).toInt()
+            val sh = Prefs.getLong(c, "drawerH2dp", 0L).toInt()
             if (sw > 0) pw = c.dp(sw).coerceIn(c.dp(280), dm.widthPixels - c.dp(16))
             if (sh > 0) ph = c.dp(sh).coerceIn(c.dp(320), (dm.heightPixels * 0.95f).toInt())
         }
@@ -234,8 +236,12 @@ class DrawerView(private val c: Context, private val bottomMargin: Int, private 
         val cols = if (wide) 4 else maxOf(3, (pw - c.dp(28)) / c.dp(92))
         grid.numColumns = cols
         grid.adapter = gridAdapter
-        grid.verticalSpacing = c.dp(6)
-        grid.horizontalSpacing = c.dp(8)
+        // square cells and the same gap down as across: the icons keep the same distance in both directions
+        grid.verticalSpacing = c.dp(4)
+        grid.horizontalSpacing = c.dp(4)
+        // the outline grows a little on hover: it must not be cut at the edge of the grid
+        grid.clipChildren = false
+        grid.clipToPadding = false
         grid.selector = android.graphics.drawable.ColorDrawable(0)
         grid.setOnItemClickListener { _, _, p, _ -> launch(apps[p]) }
         var lx = 0; var ly = 0
@@ -403,8 +409,8 @@ class DrawerView(private val c: Context, private val bottomMargin: Int, private 
             android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
                 if (!resizing) return false
                 resizing = false
-                Prefs.setLong(c, "drawerWdp", (lp.width / c.resources.displayMetrics.density).toLong())
-                Prefs.setLong(c, "drawerHdp", (lp.height / c.resources.displayMetrics.density).toLong())
+                Prefs.setLong(c, "drawerW2dp", (lp.width / c.resources.displayMetrics.density).toLong())
+                Prefs.setLong(c, "drawerH2dp", (lp.height / c.resources.displayMetrics.density).toLong())
                 invalidate()
                 return true
             }
@@ -645,6 +651,7 @@ class DrawerView(private val c: Context, private val bottomMargin: Int, private 
 
     private fun recentRow(q: String): View {
         val row = LinearLayout(c)
+        row.clipChildren = false
         row.orientation = LinearLayout.HORIZONTAL
         row.gravity = Gravity.CENTER_VERTICAL
         row.setPadding(c.dp(12), c.dp(10), c.dp(12), c.dp(10))
@@ -664,11 +671,13 @@ class DrawerView(private val c: Context, private val bottomMargin: Int, private 
     /** Apps in two rows of four, plus a "More apps" link when there are more. */
     private fun appsBlock(list: List<AppInfo> = apps, fromLast: Boolean = false): View {
         val col = LinearLayout(c)
+        col.clipChildren = false
         col.orientation = LinearLayout.VERTICAL
         val shown = list.take(8)
         for (r in 0 until 2) {
             if (r * 4 >= shown.size) break
             val row = LinearLayout(c)
+            row.clipChildren = false
             row.orientation = LinearLayout.HORIZONTAL
             for (i in 0 until 4) {
                 val idx = r * 4 + i
@@ -753,6 +762,7 @@ class DrawerView(private val c: Context, private val bottomMargin: Int, private 
         for (e in files) {
             val f = e.file
             val row = LinearLayout(c)
+            row.clipChildren = false
             row.orientation = LinearLayout.HORIZONTAL
             row.gravity = Gravity.CENTER_VERTICAL
             row.setPadding(0, c.dp(8), 0, c.dp(8))
@@ -760,6 +770,7 @@ class DrawerView(private val c: Context, private val bottomMargin: Int, private 
             Thumbs.bind(iv, f, c.dp(36))
             row.addView(iv, LinearLayout.LayoutParams(c.dp(36), c.dp(36)).also { it.marginEnd = c.dp(12) })
             val col = LinearLayout(c)
+            col.clipChildren = false
             col.orientation = LinearLayout.VERTICAL
             val n = TextView(c); n.text = f.name; n.textSize = 15f; n.maxLines = 1
             n.ellipsize = android.text.TextUtils.TruncateAt.END; n.setTextColor(Colors.text(c))
@@ -807,6 +818,7 @@ class DrawerView(private val c: Context, private val bottomMargin: Int, private 
             val shown = if (dlExpanded) dlApps else dlApps.take(8)
             for (r in 0 until (shown.size + 3) / 4) {
                 val row = LinearLayout(c)
+                row.clipChildren = false
                 row.orientation = LinearLayout.HORIZONTAL
                 for (i in 0 until 4) {
                     val idx = r * 4 + i
@@ -1043,7 +1055,7 @@ class DrawerView(private val c: Context, private val bottomMargin: Int, private 
                 false
             }
             orientation = VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
+            gravity = Gravity.CENTER
             setPadding(ctx.dp(6), ctx.dp(4), ctx.dp(6), ctx.dp(4))
             addView(icon, LayoutParams(ctx.dp(48), ctx.dp(48)))
             label.textSize = 12f
@@ -1054,10 +1066,16 @@ class DrawerView(private val c: Context, private val bottomMargin: Int, private 
             addView(label, LayoutParams(MATCH, WRAP))
         }
         override fun setSelected(selected: Boolean) { super.setSelected(selected); emphasize(this, selected || hover, true) }
+        /** At least as tall as wide: the distance between two icons is the same across and down. */
+        override fun onMeasure(wSpec: Int, hSpec: Int) {
+            super.onMeasure(wSpec, hSpec)
+            if (measuredHeight < measuredWidth) setMeasuredDimension(measuredWidth, measuredWidth)
+        }
         fun bind(a: AppInfo) {
             icon.setImageDrawable(Icons.app(context, a.comp, themed))
             icon.dot = dots && NotifState.has(a.pkg)
             label.text = a.label
+            tooltipText = a.label
         }
     }
 

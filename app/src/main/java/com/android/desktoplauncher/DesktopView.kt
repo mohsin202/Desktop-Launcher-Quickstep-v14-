@@ -80,6 +80,8 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
         isClickable = true
         isLongClickable = true
         setOnClickListener { emptyTap() }
+        // the hover / focus outline grows a little: it must not be cut at the edge of an icon's cell or of the screen
+        clipChildren = false; clipToPadding = false
         setOnLongClickListener { desktopMenu(lastX, lastY); true }
         setSecondaryClick { x, y -> desktopMenu(x, y) }
         setOnDragListener { _, event ->
@@ -1754,6 +1756,7 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
             val fv = FolderView(c, e)
             fv.setOnTouchListener(ItemTouch(e, fv))
             wireEmphasis(fv, e)
+            fv.tooltipText = e.name
             return fv
         }
         val v = LinearLayout(c)
@@ -1789,6 +1792,11 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
         v.addView(t, LinearLayout.LayoutParams(MATCH, WRAP))
         v.setOnTouchListener(ItemTouch(e, v))
         wireEmphasis(v, e)
+        v.tooltipText = when (e) {
+            is Entry.AppE -> e.info.label
+            is Entry.FileE -> Files.tooltip(context, e.file)
+            else -> null
+        }
         return v
     }
 

@@ -44,7 +44,7 @@ object UiText {
         "Create shortcuts for all files" to "تمام فائلوں کا شارٹ کٹ بنائیں", "All downloads" to "تمام ڈاؤن لوڈ",
         "Shortcuts created on Desktop" to "ڈیسک ٹاپ پر شارٹ کٹ بن گئے", "Shortcut created on Desktop" to "ڈیسک ٹاپ پر شارٹ کٹ بن گیا",
         "Create shortcut on Desktop" to "ڈیسک ٹاپ پر شارٹ کٹ بنائیں", "Could not create shortcut" to "شارٹ کٹ نہیں بن سکا", "Open" to "کھولیں", "Files" to "فائلیں",
-        "Edit" to "ترمیم", "Remove" to "ہٹائیں", "Edit widget" to "وجٹ ترمیم کریں", "Save" to "محفوظ کریں", "Size" to "حجم", "Thick" to "موٹا", "Thin" to "پتلا",
+        "Input method" to "اِن پٹ میتھڈ", "Categories" to "زمرے", "Edit" to "ترمیم", "Remove" to "ہٹائیں", "Edit widget" to "وجٹ ترمیم کریں", "Save" to "محفوظ کریں", "Size" to "حجم", "Thick" to "موٹا", "Thin" to "پتلا",
         "Style" to "اسٹائل", "Material You" to "مٹیریل یو", "Transparent" to "شفاف", "Glass" to "گلاس", "Colour" to "رنگ", "Transparency" to "شفافیت",
         "Seconds" to "سیکنڈ", "Show seconds" to "سیکنڈ دکھائیں", "Clock (digital, filled)" to "گھڑی (ڈیجیٹل، بھرا ہوا)", "Clock (digital, outline)" to "گھڑی (ڈیجیٹل، آؤٹ لائن)",
         "Clock (special, free size)" to "گھڑی (خاص، آزاد سائز)",

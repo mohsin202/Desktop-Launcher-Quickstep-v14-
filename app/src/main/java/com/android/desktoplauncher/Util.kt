@@ -336,6 +336,30 @@ object Files {
     fun mime(f: File): String =
         MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase()) ?: "*/*"
 
+    /** "MP4 (Video File)", "Folder" ... */
+    fun typeName(f: File): String {
+        if (f.isDirectory) return "Folder"
+        val ext = f.extension
+        if (ext.isEmpty()) return "File"
+        val m = mime(f)
+        val kind = when {
+            m.startsWith("video/") -> "Video"
+            m.startsWith("audio/") -> "Audio"
+            m.startsWith("image/") -> "Image"
+            m.startsWith("text/") -> "Text"
+            m == "application/pdf" -> "PDF"
+            else -> null
+        }
+        return ext.uppercase() + (if (kind != null) " ($kind File)" else " File")
+    }
+
+    /** Hover text of a desktop file: name, type and size. */
+    fun tooltip(c: Context, f: File): String {
+        val sb = StringBuilder("Name: ").append(f.name).append("\nType: ").append(typeName(f))
+        if (f.isFile) sb.append("\nSize: ").append(android.text.format.Formatter.formatShortFileSize(c, f.length()))
+        return sb.toString()
+    }
+
     fun uri(f: File): Uri = Uri.Builder().scheme("content").authority(AUTH).path(f.absolutePath).build()
 
     fun unique(dir: File, name: String): File {

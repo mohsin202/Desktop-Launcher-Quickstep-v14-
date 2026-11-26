@@ -1090,11 +1090,13 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
         center.addView(StartButton(ctx).also {
             it.background = ripple()
             it.contentDescription = UiText.text(ctx, "Apps")
+            it.tooltipText = UiText.text(ctx, "Apps")
             it.setOnClickListener { svc.toggleDrawer() }
         }, LinearLayout.LayoutParams(cell, MATCH))
         center.addView(SearchButton(ctx).also {
             it.background = ripple()
             it.contentDescription = UiText.text(ctx, "Search")
+            it.tooltipText = UiText.text(ctx, "Search")
             it.setOnClickListener { svc.openSearch() }
         }, LinearLayout.LayoutParams(cell, MATCH))
 
@@ -1139,19 +1141,23 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
 
         if (showNav && svc.imeShown && Prefs.bool(ctx, Prefs.K_IME, true)) {
             right.addView(ImeButton(ctx).also { b ->
+                b.tooltipText = UiText.text(ctx, "Input method")
                 b.background = ripple(); b.setOnClickListener { svc.pickIme() }
             }, LinearLayout.LayoutParams(cell, MATCH))
         }
         if (navButtons()) {
             right.addView(NavButton(ctx, 0).also { b ->
+                b.tooltipText = UiText.text(ctx, "Back")
                 b.background = ripple(); b.setOnClickListener { svc.global(GlobalAct.BACK) }
                 b.setOnLongClickListener { it.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS); svc.navLong(0); true }
             }, LinearLayout.LayoutParams(cell, MATCH))
             right.addView(NavButton(ctx, 1).also { b ->
+                b.tooltipText = UiText.text(ctx, "Home")
                 b.background = ripple(); b.setOnClickListener { svc.global(GlobalAct.HOME) }
                 b.setOnLongClickListener { it.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS); svc.navLong(1); true }
             }, LinearLayout.LayoutParams(cell, MATCH))
             right.addView(NavButton(ctx, 2).also { b ->
+                b.tooltipText = UiText.text(ctx, "Recents")
                 b.background = ripple(); b.setOnClickListener { svc.global(GlobalAct.RECENTS) }
                 b.setOnLongClickListener { it.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS); svc.navLong(2); true }
             }, LinearLayout.LayoutParams(cell, MATCH))
@@ -1159,6 +1165,7 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
         if (showNav && body == null) {
             // taskbar mode: the category button takes the place of the time
             val pill = CatPill(ctx, 68, 22, outline = { Colors.accent(ctx) }, ink = { null }) { (Colors.iconBg(ctx) and 0x00FFFFFF) or 0xCC000000.toInt() }
+            pill.tooltipText = UiText.text(ctx, "Categories")
             pill.setOnClickListener {
                 Launch.start(ctx, android.content.Intent(ctx, LauncherActivity::class.java).setAction(LauncherActivity.ACTION_CATEGORIES))
             }
@@ -1203,6 +1210,7 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
                 .also { it.bottomMargin = ctx.dp(3) })
         }
         f.setOnClickListener { Launch.app(ctx, comp); svc.appLaunched() }
+        f.tooltipText = try { ctx.packageManager.getActivityInfo(comp, 0).loadLabel(ctx.packageManager).toString() } catch (_: Throwable) { AppRepo.byPkg(ctx, comp.packageName)?.label ?: comp.packageName }
         val show = { x: Int, y: Int ->
             menu?.dismiss()
             val m = PopupMenuX(ctx, this)
