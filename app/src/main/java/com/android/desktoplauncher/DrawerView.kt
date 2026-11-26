@@ -1050,6 +1050,7 @@ class DrawerView(private val c: Context, private val bottomMargin: Int, private 
         private val label = TextView(ctx)
         init {
             setOnHoverListener { _, ev ->
+                HoverTip.hover(this, ev, label.text.toString(), false)
                 if (ev.actionMasked == android.view.MotionEvent.ACTION_HOVER_ENTER) { hover = true; emphasize(this, true, true) }
                 else if (ev.actionMasked == android.view.MotionEvent.ACTION_HOVER_EXIT) { hover = false; emphasize(this, isSelected, true) }
                 false
@@ -1075,7 +1076,6 @@ class DrawerView(private val c: Context, private val bottomMargin: Int, private 
             icon.setImageDrawable(Icons.app(context, a.comp, themed))
             icon.dot = dots && NotifState.has(a.pkg)
             label.text = a.label
-            tooltipText = a.label
         }
     }
 
