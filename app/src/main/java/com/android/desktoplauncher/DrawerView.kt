@@ -405,8 +405,11 @@ class DrawerView(private val c: Context, private val bottomMargin: Int, private 
                 if (w != lp.width || h != lp.height) {
                     lp.width = w; lp.height = h
                     panel.layoutParams = lp
+                    val old = curCols
                     grid.numColumns = maxOf(3, (w - c.dp(28)) / c.dp(92))
                     curCols = grid.numColumns
+                    // the search page's apps rows are built for a fixed number of icons: rebuild them for the new width
+                    if (curCols != old) try { listAdapter.notifyDataSetChanged() } catch (_: Exception) {}
                 }
                 return true
             }

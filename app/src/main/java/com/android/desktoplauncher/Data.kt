@@ -51,12 +51,36 @@ object AppRepo {
     fun find(c: Context, comp: ComponentName): AppInfo? = apps(c).firstOrNull { it.comp == comp }
     fun byPkg(c: Context, pkg: String): AppInfo? = apps(c).firstOrNull { it.pkg == pkg }
 
+    /** A newly installed app gets its icon on the desktop. (Updates arrive as "changed", so they never add it again.) */
+    private fun putOnDesktop(c: Context, pkg: String) {
+        try {
+            if (pkg == c.packageName) return
+            val la = c.getSystemService(LauncherApps::class.java)
+            val acts = la.getActivityList(pkg, Process.myUserHandle())
+            if (acts.isEmpty()) return
+            val onDesk = Prefs.list(c, Prefs.K_DESKAPPS).toMutableList()
+            val fresh = Prefs.list(c, "autoNew").toMutableList()
+            for (a in acts) {
+                val f = a.componentName.flattenToString()
+                if (f !in onDesk) { onDesk += f; fresh += "app:$f" }
+            }
+            Prefs.setList(c, Prefs.K_DESKAPPS, onDesk, fire = false)
+            Prefs.setList(c, "autoNew", fresh, fire = false)
+        } catch (_: Exception) {}
+    }
+
     fun register(c: Context) {
         val la = c.getSystemService(LauncherApps::class.java)
         la.registerCallback(object : LauncherApps.Callback() {
-            private fun changed() { cache = null; Thread { load(c) ; Bus.fire() }.start() }
+            private fun changed(added: String? = null) {
+                cache = null
+                Thread {
+                    if (added != null) putOnDesktop(c, added)
+                    load(c); Bus.fire()
+                }.start()
+            }
             override fun onPackageRemoved(packageName: String?, user: UserHandle?) = changed()
-            override fun onPackageAdded(packageName: String?, user: UserHandle?) = changed()
+            override fun onPackageAdded(packageName: String?, user: UserHandle?) = changed(packageName)
             override fun onPackageChanged(packageName: String?, user: UserHandle?) = changed()
             override fun onPackagesAvailable(packageNames: Array<out String>?, user: UserHandle?, replacing: Boolean) = changed()
             override fun onPackagesUnavailable(packageNames: Array<out String>?, user: UserHandle?, replacing: Boolean) = changed()

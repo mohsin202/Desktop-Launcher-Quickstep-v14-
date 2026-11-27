@@ -296,7 +296,9 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
         ghost?.let { overlay.remove(it) }
         ghost = null
         showHover(-1f, -1f, null)
-        if (x >= 0f && y >= 0f && placeAt(e.key, x, y, e)) {
+        if (x >= 0f && y >= 0f && applyDrop(e.key, e, x, y)) {
+            // folder / insert drop: already stored and reloaded
+        } else if (x >= 0f && y >= 0f && placeAt(e.key, x, y, e)) {
             if (e is Entry.FolderE) FolderStore.update(context, e.id) { it.sx = 1; it.sy = 1 }
             reload()
         } else {
@@ -328,30 +330,196 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
         return true
     }
 
-    private var hover: IntArray? = null
+    // What a drop at the current point would do. Shown while dragging:
+    //   CELL   - the icon moves to this free cell (outline of the cell)
+    //   MERGE  - dropped on another icon: both become a new folder (that icon shrinks, a folder shadow appears behind it)
+    //   ADD    - dropped on a folder (or the Trash): outline around it
+    //   INSERT - dropped between two icons: a line between them; this and the following icons move on
+    private class Hint(val kind: Int, val c: Int, val r: Int, val key: String?, val rect: RectF?) {
+        val sig = "$kind,$c,$r,$key,${rect?.toShortString()}"
+    }
+    private val H_CELL = 1; private val H_MERGE = 2; private val H_ADD = 3; private val H_INSERT = 4
+
+    private var hint: Hint? = null
+    private var mergeView: View? = null
     private val hoverPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
 
-    /** Outline of the cell where the dragged icon would land. */
+    private fun itemAt(col: Int, row: Int, skip: Entry?): Entry? {
+        for ((e, _) in items) {
+            if (e === skip) continue
+            val c = cells[e.key] ?: continue
+            val sp = spanOf(e)
+            if (col >= c[0] && col < c[0] + sp[0] && row >= c[1] && row < c[1] + sp[1]) return e
+        }
+        return null
+    }
+
+    private fun cellRect(col: Int, row: Int, sx: Int, sy: Int): RectF {
+        val l = paddingLeft + d(8) + col * gCw
+        val t = paddingTop + row * gCh
+        return RectF(l.toFloat(), t.toFloat(), (l + gCw * sx).toFloat(), (t + gCh * sy).toFloat())
+    }
+
+    /** The cell that follows in the order icons flow: desktop = down the column, then the next column; phone = along the row. */
+    private fun flowNext(col: Int, row: Int): IntArray? {
+        val tablet = Modes.tablet(context)
+        var c = col; var r = row
+        while (true) {
+            if (tablet) { r++; if (r >= gRows) { r = 0; c++ } } else { c++; if (c >= gCols) { c = 0; r++ } }
+            if (c >= gCols || r >= gRows) return null
+            if (!blockedByWidget(c, r)) return intArrayOf(c, r)
+        }
+    }
+
+    private fun hintFor(x: Float, y: Float, skip: Entry?, dragged: Entry?): Hint? {
+        if (x < 0f) return null
+        val legacy = { spotFor(x, y, skip)?.let { Hint(H_CELL, it[0], it[1], null, null) } }
+        if (dragged is Entry.FolderE || gCw <= 0 || gCh <= 0) return legacy()
+        val gx = x - paddingLeft - d(8)
+        val gy = y - paddingTop
+        if (gx < 0f || gy < 0f || gx >= gCols * gCw || gy >= gRows * gCh) return legacy()
+        val col = (gx / gCw).toInt(); val row = (gy / gCh).toInt()
+        if (blockedByWidget(col, row)) return legacy()
+        val occ = itemAt(col, row, skip) ?: return legacy()
+        val oc = cells[occ.key] ?: return legacy()
+        val sp = spanOf(occ)
+        val box = cellRect(oc[0], oc[1], sp[0], sp[1])
+        val trash = isTrashEntry(occ)
+        val big = occ is Entry.FolderE && (sp[0] > 1 || sp[1] > 1)
+        if (!big && manualScreen() && !trash) {
+            val fx = gx / gCw - col; val fy = gy / gCh - row
+            val t = if (Modes.tablet(context)) fy else fx
+            if (t < 0.26f || t > 0.74f) {
+                val before = t < 0.5f
+                val tgt = if (before) intArrayOf(col, row) else flowNext(col, row)
+                if (tgt != null) {
+                    val cr = cellRect(col, row, 1, 1)
+                    val m = d(10).toFloat()
+                    val line = if (Modes.tablet(context)) {
+                        val yy = if (before) cr.top else cr.bottom
+                        RectF(cr.left + m, yy, cr.right - m, yy)
+                    } else {
+                        val xx = if (before) cr.left else cr.right
+                        RectF(xx, cr.top + m, xx, cr.bottom - m)
+                    }
+                    return Hint(H_INSERT, tgt[0], tgt[1], null, line)
+                }
+            }
+        }
+        if (occ is Entry.FolderE || (trash && dragged is Entry.FileE)) return Hint(H_ADD, oc[0], oc[1], occ.key, box)
+        return Hint(H_MERGE, oc[0], oc[1], occ.key, null)
+    }
+
+    private fun setMerge(v: View?) {
+        if (v === mergeView) return
+        mergeView?.animate()?.scaleX(1f)?.scaleY(1f)?.setDuration(120)?.start()
+        mergeView = v
+        if (v != null) {
+            v.pivotX = v.width / 2f
+            v.pivotY = d(6) + d(Prefs.iconDp(context)) / 2f
+            v.animate().scaleX(0.72f).scaleY(0.72f).setDuration(120).start()
+        }
+    }
+
+    /** Shows what dropping at (x, y) would do; x < 0 clears it. [skip] is the dragged item (when it is one of ours). */
     private fun showHover(x: Float, y: Float, skip: Entry?) {
-        val n = if (x < 0f) null else spotFor(x, y, skip)
-        if (n?.toList() == hover?.toList()) return
-        hover = n
+        val n = if (x < 0f) null else hintFor(x, y, skip, skip)
+        if (n?.sig == hint?.sig) return
+        hint = n
+        setMerge(if (n?.kind == H_MERGE) items.firstOrNull { it.first.key == n.key }?.second else null)
         invalidate()
     }
 
     override fun dispatchDraw(canvas: android.graphics.Canvas) {
+        val h = hint
+        val acc = Colors.accent(context)
+        if (h != null && h.kind == H_MERGE) {
+            // the folder shadow sits behind the shrunk icon
+            val sz = d(Prefs.iconDp(context)).toFloat()
+            val cr = cellRect(h.c, h.r, 1, 1)
+            val cx = cr.centerX(); val cy = cr.top + d(6) + sz / 2f
+            val half = sz * 0.68f
+            hoverPaint.style = android.graphics.Paint.Style.FILL
+            hoverPaint.color = 0x66FFFFFF
+            canvas.drawRoundRect(RectF(cx - half, cy - half, cx + half, cy + half), half * 0.55f, half * 0.55f, hoverPaint)
+        }
         super.dispatchDraw(canvas)
-        val h = hover ?: return
-        val l = paddingLeft + d(8) + h[0] * gCw + d(4)
-        val t = paddingTop + h[1] * gCh + d(2)
-        val r = RectF(l.toFloat(), t.toFloat(), (l + gCw - d(8)).toFloat(), (t + gCh - d(4)).toFloat())
-        hoverPaint.style = android.graphics.Paint.Style.FILL
-        hoverPaint.color = (Colors.accent(context) and 0x00FFFFFF) or 0x26000000
-        canvas.drawRoundRect(r, d(14).toFloat(), d(14).toFloat(), hoverPaint)
-        hoverPaint.style = android.graphics.Paint.Style.STROKE
-        hoverPaint.strokeWidth = d(2).toFloat()
-        hoverPaint.color = Colors.accent(context)
-        canvas.drawRoundRect(r, d(14).toFloat(), d(14).toFloat(), hoverPaint)
+        if (h == null) return
+        when (h.kind) {
+            H_CELL -> {
+                val l = paddingLeft + d(8) + h.c * gCw + d(4)
+                val t = paddingTop + h.r * gCh + d(2)
+                val r = RectF(l.toFloat(), t.toFloat(), (l + gCw - d(8)).toFloat(), (t + gCh - d(4)).toFloat())
+                hoverPaint.style = android.graphics.Paint.Style.FILL
+                hoverPaint.color = (acc and 0x00FFFFFF) or 0x26000000
+                canvas.drawRoundRect(r, d(14).toFloat(), d(14).toFloat(), hoverPaint)
+                hoverPaint.style = android.graphics.Paint.Style.STROKE
+                hoverPaint.strokeWidth = d(2).toFloat()
+                hoverPaint.color = acc
+                canvas.drawRoundRect(r, d(14).toFloat(), d(14).toFloat(), hoverPaint)
+            }
+            H_ADD -> {
+                val r = RectF(h.rect!!)
+                r.inset(d(4).toFloat(), d(4).toFloat())
+                hoverPaint.style = android.graphics.Paint.Style.FILL
+                hoverPaint.color = (acc and 0x00FFFFFF) or 0x2E000000
+                canvas.drawRoundRect(r, d(22).toFloat(), d(22).toFloat(), hoverPaint)
+                hoverPaint.style = android.graphics.Paint.Style.STROKE
+                hoverPaint.strokeWidth = d(3).toFloat()
+                hoverPaint.color = acc
+                canvas.drawRoundRect(r, d(22).toFloat(), d(22).toFloat(), hoverPaint)
+            }
+            H_INSERT -> {
+                val r = h.rect!!
+                hoverPaint.style = android.graphics.Paint.Style.STROKE
+                hoverPaint.strokeWidth = d(4).toFloat()
+                hoverPaint.strokeCap = android.graphics.Paint.Cap.ROUND
+                hoverPaint.color = acc
+                canvas.drawLine(r.left, r.top, r.right, r.bottom, hoverPaint)
+                hoverPaint.strokeCap = android.graphics.Paint.Cap.BUTT
+            }
+        }
+    }
+
+    /**
+     * Applies a drop of the item [key] at (x, y) when it is a folder / insert drop (as shown by [hintFor]).
+     * [dragged] is the item's own entry when it is already on this screen. True = done and the desktop is reloaded.
+     */
+    private fun applyDrop(key: String, dragged: Entry?, x: Float, y: Float): Boolean {
+        val h = hintFor(x, y, dragged, dragged) ?: return false
+        val target = h.key?.let { k -> items.firstOrNull { it.first.key == k }?.first }
+        when (h.kind) {
+            H_MERGE -> { if (target == null || target === dragged) return false; createFolderKeys(target.key, key); return true }
+            H_ADD -> {
+                if (target is Entry.FolderE) { if (key !in target.members) addToFolderKey(target.id, key) else reload(); return true }
+                if (target != null && dragged is Entry.FileE && isTrashEntry(target)) { trashDropped(dragged.file); return true }
+                return false
+            }
+            H_INSERT -> {
+                Cats.assign(context, key, if (Cats.isCustom(catId)) catId else null)
+                savePosHere(insertAt(key, dragged, h.c, h.r))
+                reload()
+                return true
+            }
+        }
+        return false
+    }
+
+    /** The item goes to (tc, tr); whoever was there moves to the next cell, and so on until a free cell is found. */
+    private fun insertAt(key: String, skip: Entry?, tc: Int, tr: Int): Map<String, IntArray> {
+        val m = LinkedHashMap<String, IntArray>()
+        m[key] = intArrayOf(tc, tr)
+        var carry: Entry? = itemAt(tc, tr, skip)
+        var c = tc; var r = tr
+        while (carry != null) {
+            val n = flowNext(c, r) ?: break
+            c = n[0]; r = n[1]
+            val occ = itemAt(c, r, skip)
+            if (occ is Entry.FolderE && (occ.sx > 1 || occ.sy > 1)) continue   // a big folder stays where it is
+            m[carry.key] = intArrayOf(c, r)
+            carry = occ
+        }
+        return m
     }
 
     private fun spotFor(x: Float, y: Float, skip: Entry?): IntArray? {
@@ -420,6 +588,8 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
         }
         // an app that sat inside a folder leaves it
         for (fd in FolderStore.load(c)) if (key in fd.members) FolderStore.update(c, fd.id) { it.members.remove(key) }
+        val self = items.firstOrNull { it.first.key == key }?.first
+        if (applyDrop(key, self, x, y)) return true
         if (!placeAt(key, x, y, null)) {
             c.toast(UiText.text(c, "Added to the desktop. Open All or your own screen to choose its place"))
         }
@@ -717,8 +887,12 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
         // with the user's own layout page in front of All, new icons go there only while that page is showing
         val startPage = if (cat == Cats.ALL && Cats.hasFree(context) && !(catId == Cats.ALL && pageIdx == 0)) 1 else 0
         var i = startPage * cap
+        // apps that were just installed never go to the user's own layout page: they start on the next page
+        val autoNew: Set<String> = if (cat == Cats.ALL) Prefs.list(context, "autoNew").toHashSet() else emptySet()
+        val ownPage = cat == Cats.ALL && Cats.hasFree(context)
         for (e in list) {
             if (pos.containsKey(e.key)) continue
+            if (ownPage && e.key in autoNew && i < cap) i = cap
             var placed: IntArray? = null
             while (placed == null && i < cap * 500) {
                 val pg = i / cap; val k = i % cap; i++
@@ -743,6 +917,11 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
         }
         for (k in fresh) pos[k]?.let { toSave[k] = it }
         if (toSave.isNotEmpty()) savePos(cat, toSave)
+        if (autoNew.isNotEmpty()) {
+            // once an installed app has its place (saved above) it is a normal icon
+            val keep = autoNew.filter { k -> list.none { it.key == k } || k !in pos.keys }
+            if (keep.size != autoNew.size) Prefs.setList(context, "autoNew", keep, fire = false)
+        }
         return CatLayout(maxOf(1, used.size), pos)
     }
 
@@ -1492,29 +1671,26 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
         val col = ((cx - paddingLeft - d(8)) / gCw).toInt().coerceIn(0, gCols - 1)
         val row = ((cy - paddingTop) / gCh).toInt().coerceIn(0, gRows - 1)
         if (blockedByWidget(col, row)) { requestLayout(); return }
+        // folder / Trash / insert-between drops are decided exactly as the hint showed them
+        if (applyDrop(e.key, e, cx, cy)) return
         val target = itemAtCell(col, row, e)
-        if (target != null) {
-            // Dropping a file on the Trash icon moves it to the trash straight away.
-            if (e is Entry.FileE && isTrashEntry(target)) { requestLayout(); trashDropped(e.file); return }
-            if (target is Entry.FolderE) { addToFolder(target, e); return }
-            createFolder(target, e); return
-        }
+        if (target != null) { requestLayout(); return }
         savePosHere(mapOf(e.key to intArrayOf(col, row)))
         rebuild()
     }
 
-    private fun createFolder(target: Entry, dragged: Entry) {
+    private fun createFolderKeys(targetKey: String, draggedKey: String) {
         val c = context
         val id = System.currentTimeMillis().toString(36)
         val list = FolderStore.load(c)
-        list += FolderData(id, "Folder", 1, 1, mutableListOf(target.key, dragged.key))
+        list += FolderData(id, "Folder", 1, 1, mutableListOf(targetKey, draggedKey))
         FolderStore.save(c, list)
-        cells[target.key]?.let { savePosHere(mapOf("folder:$id" to intArrayOf(it[0], it[1]))) }
+        cells[targetKey]?.let { savePosHere(mapOf("folder:$id" to intArrayOf(it[0], it[1]))) }
         reload()
     }
 
-    private fun addToFolder(f: Entry.FolderE, e: Entry) {
-        FolderStore.update(context, f.id) { if (e.key !in it.members) it.members += e.key }
+    private fun addToFolderKey(folderId: String, key: String) {
+        FolderStore.update(context, folderId) { if (key !in it.members) it.members += key }
         reload()
     }
 
@@ -1717,12 +1893,14 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
                         }
                         v.translationX = dx; v.translationY = dy
                         trackEdge(e, v, ev.rawX)
+                        showHover(v.left + v.width / 2f + dx, v.top + v.height / 2f + dy, e)
                     }
                     return true
                 }
                 MotionEvent.ACTION_UP -> {
                     if (carry == null) dragLock = false
                     endTrack()
+                    showHover(-1f, -1f, null)
                     v.removeCallbacks(longPress)
                     if (blockLong) { blockLong = false; return true }
                     if (fResize && e is Entry.FolderE) {
@@ -1747,6 +1925,7 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
                 MotionEvent.ACTION_CANCEL -> {
                     if (carry == null && sysEntry == null) dragLock = false
                     endTrack()
+                    showHover(-1f, -1f, null)
                     v.removeCallbacks(longPress)
                     if (fResize && e is Entry.FolderE) { fResize = false; FolderStore.update(context, e.id) { it.sx = e.sx; it.sy = e.sy } }
                     state = 0; secondary = false
