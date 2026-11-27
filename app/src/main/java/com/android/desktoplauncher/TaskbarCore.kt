@@ -407,7 +407,9 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
         // As a system app the list comes from the system itself (the Recents list): an app is "running" exactly while its task exists.
         if (syncTasks(fg)) {
             var c2 = taskCh
-            if (fg != focused) { if (expanded && drawer == null) handler.post { setExpanded(false) }; focused = fg; c2 = true }
+            // the app in front: the first task of the system's list (the accessibility window list is gone); null while the desktop shows
+            val front = taskTop ?: fg
+            if (front != focused) { if (expanded && drawer == null) handler.post { setExpanded(false) }; focused = front; c2 = true }
             val ime0 = imeWin || editing || SysUi.has(SysUiState.IME_SHOWING)
             if (ime0 != imeShown) { imeShown = ime0; c2 = true }
             if (c2) bar?.refresh()
@@ -436,6 +438,7 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
      * show other apps' tasks, i.e. when the launcher is an ordinary app.
      */
     private var taskCh = false
+    private var taskTop: String? = null
     private fun syncTasks(fg: String? = null): Boolean {
         val l = SysTasks.tasks(this) ?: return false
         val homes = try {
@@ -443,6 +446,8 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
         } catch (_: Exception) { emptySet() }
         val alive = LinkedHashSet<String>()
         for (t in l) if (!skip(t.pkg) && t.pkg !in homes) alive += t.pkg
+        val first = l.firstOrNull()?.pkg
+        taskTop = if (first != null && !skip(first) && first !in homes) first else null
         dismissed.retainAll(alive)          // a hidden app that has no task any more may come back when it is opened again
         val f = fg ?: focused
         val pk = LinkedHashSet<String>()
