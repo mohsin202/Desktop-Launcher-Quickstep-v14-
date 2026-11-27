@@ -1419,10 +1419,18 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
     private fun viewOf(e: Entry): View? = items.firstOrNull { it.first === e }?.second
 
     /** Pointer hover, keyboard focus (Tab / arrow keys) and Enter / menu key for a desktop icon. */
+    /** Hover label of a desktop icon: the name; for a file also its type and size. */
+    private fun tipText(e: Entry): String = when (e) {
+        is Entry.AppE -> e.info.label
+        is Entry.FileE -> Files.tooltip(context, e.file)
+        is Entry.FolderE -> e.name
+    }
+
     private fun wireEmphasis(v: View, e: Entry) {
         v.isFocusable = true
         v.defaultFocusHighlightEnabled = false
         v.setOnHoverListener { _, ev ->
+            HoverTip.hover(v, ev, tipText(e), false, 6)
             if (ev.actionMasked == MotionEvent.ACTION_HOVER_ENTER) setEmph(v, 1, true)
             else if (ev.actionMasked == MotionEvent.ACTION_HOVER_EXIT) setEmph(v, 1, false)
             false
@@ -1756,7 +1764,6 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
             val fv = FolderView(c, e)
             fv.setOnTouchListener(ItemTouch(e, fv))
             wireEmphasis(fv, e)
-            fv.tooltipText = e.name
             return fv
         }
         val v = LinearLayout(c)
@@ -1792,11 +1799,6 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
         v.addView(t, LinearLayout.LayoutParams(MATCH, WRAP))
         v.setOnTouchListener(ItemTouch(e, v))
         wireEmphasis(v, e)
-        v.tooltipText = when (e) {
-            is Entry.AppE -> e.info.label
-            is Entry.FileE -> Files.tooltip(context, e.file)
-            else -> null
-        }
         return v
     }
 

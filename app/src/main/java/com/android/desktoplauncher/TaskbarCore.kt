@@ -36,6 +36,8 @@ interface TaskbarHost {
     fun global(action: Int)
     /** Long press on Back (0), Home (1) or Recents (2). */
     fun navLong(kind: Int) {}
+    /** Swipe along the gesture handle: [dir] +1 = the app used before, -1 = back towards the newer one. */
+    fun quickSwitch(dir: Int) {}
     fun hideRunning(pkg: String)
     /** Ends the app's tasks (like swiping it away in Recents); only possible when the launcher is a system app. */
     fun closeApp(pkg: String) {}
@@ -469,6 +471,28 @@ class TaskbarCore private constructor(base: Context) : ContextWrapper(base), Tas
             else -> {}   // screenshot, power menu: not possible for an app without a service
         }
     }
+    private var qsList: List<RTask>? = null
+    private var qsIdx = -1
+    private var qsTime = 0L
+    /** Quick switch: the list of Recents stays the same for a few seconds so that repeated swipes walk through it. */
+    override fun quickSwitch(dir: Int) {
+        Thread {
+            val now = android.os.SystemClock.uptimeMillis()
+            var list = qsList
+            if (list == null || now - qsTime > 4000) {
+                list = Recents.load(this)
+                qsList = list
+                val f = focused
+                qsIdx = if (f == null) -1 else list.indexOfFirst { it.pkg == f }
+            }
+            val ni = qsIdx + dir
+            if (ni !in list.indices) return@Thread
+            qsIdx = ni; qsTime = now
+            val t = list[ni]
+            handler.post { Recents.open(this, t) }
+        }.start()
+    }
+
     override fun global(action: Int) {
         // Back goes through SystemUI's own proxy when connected: exactly what the stock navigation bar does
         if (action == GlobalAct.BACK && SysUi.back()) return
@@ -874,7 +898,7 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
     /** The handle gets a little thicker while a finger or the mouse is on it, like the system one. */
     private fun widen(on: Boolean) {
         handleV.animate().cancel()
-        handleV.animate().scaleX(if (on) 1.35f else 1f).scaleY(if (on) 2f else 1f).setDuration(120).start()
+        handleV.animate().scaleX(if (on) 1.35f else 1f).scaleY(1f).setDuration(120).start()   // a little longer, not thicker
     }
 
     override fun dispatchHoverEvent(ev: android.view.MotionEvent): Boolean {
@@ -1002,10 +1026,18 @@ class TaskbarView(private val ctx: Context, private val svc: TaskbarHost, privat
         if (ev.actionMasked == android.view.MotionEvent.ACTION_UP || ev.actionMasked == android.view.MotionEvent.ACTION_CANCEL) {
             val was = gActive
             gActive = false
+            // sideways along the handle: previous / next app of Recents (like the stock gesture bar)
+            val ac = across(ev.rawX, ev.rawY)
+            val swiped = !was && ev.actionMasked == android.view.MotionEvent.ACTION_UP && collapsed &&
+                Math.abs(ac) > ctx.dp(56) && Math.abs(ac) > Math.abs(inward(ev.rawX, ev.rawY)) * 1.5f
+            if (swiped) {
+                performHapticFeedback(android.view.HapticFeedbackConstants.GESTURE_END)
+                svc.quickSwitch(if (ac > 0) 1 else -1)
+            }
             if (collapsed) {
                 if (!hoverPending) widen(false)
                 // a mouse click on the strip shows the taskbar at once
-                if (!was && gMouse && ev.actionMasked == android.view.MotionEvent.ACTION_UP) svc.expandBar()
+                if (!was && !swiped && gMouse && ev.actionMasked == android.view.MotionEvent.ACTION_UP) svc.expandBar()
             }
             val vt = gVt; gVt = null
             vt?.addMovement(ev)

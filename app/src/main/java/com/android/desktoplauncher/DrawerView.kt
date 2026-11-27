@@ -98,6 +98,8 @@ class DrawerView(private val c: Context, private val bottomMargin: Int, private 
         style = android.graphics.Paint.Style.STROKE; strokeCap = android.graphics.Paint.Cap.ROUND
     }
     private var dlApps: List<AppInfo> = emptyList()
+    /** Icons per row of the app grid; the search page uses the same number. */
+    private var curCols = 4
 
     private val gridAdapter = object : BaseAdapter() {
         override fun getCount() = apps.size
@@ -234,6 +236,7 @@ class DrawerView(private val c: Context, private val bottomMargin: Int, private 
         panel.addView(search, LinearLayout.LayoutParams(MATCH, c.dp(50)))
 
         val cols = if (wide) 4 else maxOf(3, (pw - c.dp(28)) / c.dp(92))
+        curCols = cols
         grid.numColumns = cols
         grid.adapter = gridAdapter
         // square cells and the same gap down as across: the icons keep the same distance in both directions
@@ -403,6 +406,7 @@ class DrawerView(private val c: Context, private val bottomMargin: Int, private 
                     lp.width = w; lp.height = h
                     panel.layoutParams = lp
                     grid.numColumns = maxOf(3, (w - c.dp(28)) / c.dp(92))
+                    curCols = grid.numColumns
                 }
                 return true
             }
@@ -673,14 +677,15 @@ class DrawerView(private val c: Context, private val bottomMargin: Int, private 
         val col = LinearLayout(c)
         col.clipChildren = false
         col.orientation = LinearLayout.VERTICAL
-        val shown = list.take(8)
+        val n = curCols
+        val shown = list.take(2 * n)
         for (r in 0 until 2) {
-            if (r * 4 >= shown.size) break
+            if (r * n >= shown.size) break
             val row = LinearLayout(c)
             row.clipChildren = false
             row.orientation = LinearLayout.HORIZONTAL
-            for (i in 0 until 4) {
-                val idx = r * 4 + i
+            for (i in 0 until n) {
+                val idx = r * n + i
                 if (idx < shown.size) {
                     val a = shown[idx]
                     val cell = AppCell(c)
@@ -696,7 +701,7 @@ class DrawerView(private val c: Context, private val bottomMargin: Int, private 
             }
             col.addView(row, LinearLayout.LayoutParams(MATCH, WRAP))
         }
-        if (list.size > 8 || (fromLast && allApps.size > list.size)) {
+        if (list.size > 2 * n || (fromLast && allApps.size > list.size)) {
             val more = TextView(c)
             more.text = UiText.text(c, "More apps")
             more.textSize = 14f
@@ -815,13 +820,14 @@ class DrawerView(private val c: Context, private val bottomMargin: Int, private 
                 h.setPadding(0, c.dp(10), 0, c.dp(2))
                 inner.addView(h)
             }
-            val shown = if (dlExpanded) dlApps else dlApps.take(8)
-            for (r in 0 until (shown.size + 3) / 4) {
+            val n = curCols
+            val shown = if (dlExpanded) dlApps else dlApps.take(2 * n)
+            for (r in 0 until (shown.size + n - 1) / n) {
                 val row = LinearLayout(c)
                 row.clipChildren = false
                 row.orientation = LinearLayout.HORIZONTAL
-                for (i in 0 until 4) {
-                    val idx = r * 4 + i
+                for (i in 0 until n) {
+                    val idx = r * n + i
                     if (idx < shown.size) {
                         val a = shown[idx]
                         val cell = AppCell(c)
@@ -838,7 +844,7 @@ class DrawerView(private val c: Context, private val bottomMargin: Int, private 
             }
         }
 
-        if (dlFiles.size > 5 || dlApps.size > 8) {
+        if (dlFiles.size > 5 || dlApps.size > 2 * curCols) {
             val all = TextView(c)
             all.text = UiText.text(c, if (dlExpanded) "Show less" else "All downloads")
             all.textSize = 14f

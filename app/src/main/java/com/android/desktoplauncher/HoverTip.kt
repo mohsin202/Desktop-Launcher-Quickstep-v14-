@@ -37,13 +37,13 @@ object HoverTip {
      * label yet - on enter and also on move - so it still appears when the bar was rebuilt under a resting mouse or when
      * the exit of the previous icon arrived late.
      */
-    fun hover(v: View, ev: MotionEvent, text: String, above: Boolean) {
+    fun hover(v: View, ev: MotionEvent, text: String, above: Boolean, maxLines: Int = 2) {
         when (ev.actionMasked) {
             MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE -> {
                 if (current === v && (show != null || pw != null)) return
                 if (current !== v) hide()
                 current = v
-                val r = Runnable { display(v, text, above) }
+                val r = Runnable { display(v, text, above, maxLines) }
                 show = r
                 handler.postDelayed(r, 400)
             }
@@ -52,7 +52,7 @@ object HoverTip {
         }
     }
 
-    private fun display(v: View, text: String, above: Boolean) {
+    private fun display(v: View, text: String, above: Boolean, maxLines: Int) {
         show = null
         if (text.isEmpty() || !v.isAttachedToWindow) return
         val c: Context = v.context
@@ -60,11 +60,11 @@ object HoverTip {
         tv.text = text
         tv.textSize = 13f
         tv.setTextColor(0xFFFFFFFF.toInt())
-        tv.maxLines = 2
+        tv.maxLines = maxLines
         tv.setPadding(c.dp(10), c.dp(6), c.dp(10), c.dp(6))
         tv.background = Colors.rounded(0xF2303030.toInt(), c.dp(8).toFloat())
         val dm = c.resources.displayMetrics
-        tv.measure(View.MeasureSpec.makeMeasureSpec(dm.widthPixels - c.dp(24), View.MeasureSpec.AT_MOST), View.MeasureSpec.UNSPECIFIED)
+        tv.measure(View.MeasureSpec.makeMeasureSpec(minOf(dm.widthPixels - c.dp(24), c.dp(360)), View.MeasureSpec.AT_MOST), View.MeasureSpec.UNSPECIFIED)
         val w = tv.measuredWidth
         val h = tv.measuredHeight
         val loc = IntArray(2)
@@ -73,7 +73,8 @@ object HoverTip {
         v.getLocationInWindow(inWin)
         var x = loc[0] + v.width / 2 - w / 2
         x = x.coerceIn(c.dp(4), maxOf(c.dp(4), dm.widthPixels - w - c.dp(4)))
-        val y = if (above) loc[1] - c.dp(2) - h else loc[1] + v.height + c.dp(2)
+        var y = if (above) loc[1] - c.dp(2) - h else loc[1] + v.height + c.dp(2)
+        if (!above && y + h > dm.heightPixels - c.dp(4)) y = loc[1] - c.dp(2) - h   // no room below: above the icon
         try {
             val p = PopupWindow(tv, w, h, false)
             p.isTouchable = false
