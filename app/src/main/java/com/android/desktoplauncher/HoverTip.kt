@@ -19,6 +19,8 @@ object HoverTip {
     private var pw: PopupWindow? = null
     private var show: Runnable? = null
 
+    private var current: View? = null
+
     fun hide() {
         show?.let { handler.removeCallbacks(it) }
         show = null
@@ -30,15 +32,23 @@ object HoverTip {
         v.setOnHoverListener { x, ev -> hover(x, ev, text, above); false }
     }
 
+    /**
+     * Called for every hover event of the icon. The label is (re)scheduled whenever the mouse is on an icon that has no
+     * label yet - on enter and also on move - so it still appears when the bar was rebuilt under a resting mouse or when
+     * the exit of the previous icon arrived late.
+     */
     fun hover(v: View, ev: MotionEvent, text: String, above: Boolean) {
         when (ev.actionMasked) {
-            MotionEvent.ACTION_HOVER_ENTER -> {
-                hide()
+            MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE -> {
+                if (current === v && (show != null || pw != null)) return
+                if (current !== v) hide()
+                current = v
                 val r = Runnable { display(v, text, above) }
                 show = r
-                handler.postDelayed(r, 450)
+                handler.postDelayed(r, 400)
             }
-            MotionEvent.ACTION_HOVER_EXIT, MotionEvent.ACTION_DOWN, MotionEvent.ACTION_BUTTON_PRESS -> hide()
+            MotionEvent.ACTION_HOVER_EXIT -> if (current === v) { current = null; hide() }
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_BUTTON_PRESS -> hide()
         }
     }
 
@@ -59,6 +69,8 @@ object HoverTip {
         val h = tv.measuredHeight
         val loc = IntArray(2)
         v.getLocationOnScreen(loc)
+        val inWin = IntArray(2)
+        v.getLocationInWindow(inWin)
         var x = loc[0] + v.width / 2 - w / 2
         x = x.coerceIn(c.dp(4), maxOf(c.dp(4), dm.widthPixels - w - c.dp(4)))
         val y = if (above) loc[1] - c.dp(2) - h else loc[1] + v.height + c.dp(2)
@@ -66,9 +78,11 @@ object HoverTip {
             val p = PopupWindow(tv, w, h, false)
             p.isTouchable = false
             p.isFocusable = false
-            p.showAtLocation(v, Gravity.NO_GRAVITY, x, y.coerceAtLeast(0))
+            p.isClippingEnabled = false   // it sits above the bar, outside the bar's own window
+            // A popup is positioned relative to its parent window (the taskbar window), so convert from screen coordinates.
+            p.showAtLocation(v, Gravity.NO_GRAVITY, x - (loc[0] - inWin[0]), y.coerceAtLeast(0) - (loc[1] - inWin[1]))
             pw = p
-            handler.postDelayed({ if (pw === p) hide() }, 4000)
+            handler.postDelayed({ if (pw === p) { hide() } }, 4000)
         } catch (_: Throwable) { }
     }
 }
