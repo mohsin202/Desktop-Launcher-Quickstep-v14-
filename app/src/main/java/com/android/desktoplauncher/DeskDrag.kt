@@ -19,6 +19,8 @@ object DeskDrag {
     const val LABEL = "desk-drag"
     const val APP = "app"
     const val FILE = "file"
+    /** An icon dragged out of an open folder of the desktop: the value is the item's key. */
+    const val MEMBER = "member"
 
     class Payload(val kind: String, val value: String)
 

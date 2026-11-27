@@ -578,6 +578,7 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
                 if (p.value !in l) Prefs.setList(c, Prefs.K_DESKAPPS, l + p.value, fire = false)
                 key = "app:" + p.value
             }
+            DeskDrag.MEMBER -> key = p.value
             DeskDrag.FILE -> {
                 val fl = all.ifEmpty { listOf(File(p.value)).filter { it.exists() } }
                 if (fl.isEmpty()) return false
@@ -1771,6 +1772,26 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
             }
         }
         grid.setOnItemClickListener { _, _, p, _ -> val en = f.resolved[p]; closeFolder(); open(en) }
+        // Grab an icon and pull it out of the folder: the folder closes and the icon is dragged to its new place on the desktop
+        val slop2 = android.view.ViewConfiguration.get(c).scaledTouchSlop * 2
+        var gx0 = 0f; var gy0 = 0f; var gPos = -1; var gDone = false
+        grid.setOnTouchListener { _, ev ->
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> { gx0 = ev.x; gy0 = ev.y; gDone = false; gPos = grid.pointToPosition(ev.x.toInt(), ev.y.toInt()) }
+                MotionEvent.ACTION_MOVE -> if (!gDone && gPos in f.resolved.indices) {
+                    val ddx = ev.x - gx0; val ddy = ev.y - gy0
+                    val mouse = ev.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE
+                    if (Math.hypot(ddx.toDouble(), ddy.toDouble()) > slop2 && (mouse || Math.abs(ddx) > Math.abs(ddy))) {
+                        gDone = true
+                        val en = f.resolved[gPos]
+                        val cellV = grid.getChildAt(gPos - grid.firstVisiblePosition) as? ViewGroup
+                        val icon = (cellV?.getChildAt(0) as? android.widget.ImageView)?.drawable
+                        if (DeskDrag.start(this, DeskDrag.Payload(DeskDrag.MEMBER, en.key), icon)) post { closeFolder() }
+                    }
+                }
+            }
+            false
+        }
         grid.setOnItemLongClickListener { _, v, p, _ ->
             val en = f.resolved[p]
             val loc = IntArray(2); v.getLocationOnScreen(loc)
@@ -2060,17 +2081,22 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
         m.spotlight = iview
         m.onClosed = { setEmph(iview, 4, false) }
         when (e) {
-            is Entry.AppE -> m.show(x, y, listOf(
-                MenuItem("Open") { open(e) },
-                MenuItem("App Info") { Launch.info(c, e.info.pkg) },
-                MenuItem("Share") { Launch.shareApp(c, e.info.pkg) },
-                Launch.sizeMenu(c, e.info.comp),
-                moveItem(e),
-                MenuItem("Remove") {
-                    Prefs.setList(c, Prefs.K_DESKAPPS, Prefs.list(c, Prefs.K_DESKAPPS).filter { it != e.info.comp.flattenToString() })
-                },
-                MenuItem("Uninstall") { Launch.uninstall(c, e.info.pkg) }
-            ))
+            is Entry.AppE -> {
+                val head = arrayListOf(
+                    MenuItem("Open") { open(e) },
+                    MenuItem("App Info") { Launch.info(c, e.info.pkg) },
+                    MenuItem("Share") { Launch.shareApp(c, e.info.pkg) }
+                )
+                if (isTrashEntry(e)) head += MenuItem("Empty trash") { confirmEmptyTrash() }
+                m.show(x, y, head + listOf(
+                    Launch.sizeMenu(c, e.info.comp),
+                    moveItem(e),
+                    MenuItem("Remove") {
+                        Prefs.setList(c, Prefs.K_DESKAPPS, Prefs.list(c, Prefs.K_DESKAPPS).filter { it != e.info.comp.flattenToString() })
+                    },
+                    MenuItem("Uninstall") { Launch.uninstall(c, e.info.pkg) }
+                ))
+            }
             is Entry.FileE -> m.show(x, y, listOf(
                 MenuItem("Open") { open(e) },
                 MenuItem("Rename") { renameItem(e.file) },
@@ -2145,6 +2171,52 @@ class DesktopView(private val act: LauncherActivity) : FrameLayout(act) {
             }.start()
         }
         dlg.show()
+    }
+
+    /** "Empty trash": asks with the number of items, then deletes them for good. */
+    private fun confirmEmptyTrash() {
+        Thread {
+            val all = try { TrashStore.list(context) } catch (_: Exception) { emptyList() }
+            post {
+                if (all.isEmpty()) { context.toast(UiText.text(context, "The trash is already empty")); return@post }
+                val box = LinearLayout(act)
+                box.orientation = LinearLayout.VERTICAL
+                box.setPadding(d(24), d(22), d(24), d(20))
+                box.background = Colors.panel(act, Colors.surfaceSolid(act), d(28).toFloat())
+                UiText.applyDirection(box, act)
+                val msg = TextView(act)
+                msg.text = "${all.size} " + UiText.text(act, "items will be permanently deleted.")
+                msg.textSize = 18f
+                msg.gravity = Gravity.CENTER
+                msg.setTextColor(Colors.text(act))
+                box.addView(msg, LinearLayout.LayoutParams(MATCH, WRAP))
+                val del = TextView(act)
+                del.text = UiText.text(act, "Delete")
+                del.textSize = 17f
+                del.gravity = Gravity.CENTER
+                del.setTextColor(Colors.iconFg(act))
+                del.background = Colors.rounded(Colors.iconBg(act), d(28).toFloat())
+                box.addView(del, LinearLayout.LayoutParams(MATCH, d(52)).also { it.topMargin = d(18) })
+                val cancel = TextView(act)
+                cancel.text = UiText.text(act, "Cancel")
+                cancel.textSize = 17f
+                cancel.gravity = Gravity.CENTER
+                cancel.setTextColor(Colors.text(act))
+                cancel.background = Colors.rounded(Colors.surfaceHigh(act), d(28).toFloat())
+                box.addView(cancel, LinearLayout.LayoutParams(MATCH, d(52)).also { it.topMargin = d(8) })
+                val dlg = AlertDialog.Builder(act).setView(box).create()
+                dlg.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(0))
+                cancel.setOnClickListener { dlg.dismiss() }
+                del.setOnClickListener {
+                    dlg.dismiss()
+                    Thread {
+                        for (it in all) TrashStore.deleteForever(context, it)
+                        post { trashAt = 0L; reload(); context.toast(UiText.text(context, "Trash emptied")) }
+                    }.start()
+                }
+                dlg.show()
+            }
+        }.start()
     }
 
     /** A file was dragged onto the Trash icon: no question asked. */

@@ -8,6 +8,8 @@ import android.view.View.LAYOUT_DIRECTION_RTL
 /** Small built-in English/Urdu UI dictionary and independent layout-direction preference. */
 object UiText {
     private val ur = mapOf(
+        "Empty trash" to "ٹریش خالی کریں", "items will be permanently deleted." to "آئٹمز مستقل طور پر حذف ہو جائیں گے۔",
+        "The trash is already empty" to "ٹریش پہلے ہی خالی ہے", "Trash emptied" to "ٹریش خالی کر دی گئی", "Cancel" to "منسوخ کریں",
         "Desktop Launcher" to "ڈیسک ٹاپ لانچر", "Apps" to "ایپس", "Settings" to "ترتیبات", "ICONS" to "آئیکنز",
         "Choose language and reading direction" to "زبان اور پڑھنے کی سمت منتخب کریں",
         "Icon size and app appearance" to "آئیکنز کا سائز اور ایپس کی ظاہری شکل",
